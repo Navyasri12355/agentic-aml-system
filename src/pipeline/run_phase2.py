@@ -267,7 +267,7 @@ def main():
         investigate_count = 0
         true_investigate_positive = 0
 
-        for row in eval_df.itertuples(index=False):
+        for _, row in eval_df.iterrows():
             try:
                 account_id = choose_account(row)
                 flag_date = safe_timestamp(row)
