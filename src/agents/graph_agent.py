@@ -44,7 +44,7 @@ class GraphAgent:
         self,
         account_id,
         cutoff_date,
-        max_neighbors=100
+        max_neighbors=150
     ):
         sent = self.sender_map.get(account_id, pd.DataFrame())
         recv = self.receiver_map.get(account_id, pd.DataFrame())
@@ -73,7 +73,7 @@ class GraphAgent:
         seed_account,
         cutoff_date,
         hop_radius=1,
-        max_neighbors=100
+        max_neighbors=150
     ):
         visited = set()
         frontier = {seed_account}
@@ -122,7 +122,7 @@ class GraphAgent:
         flag_date,
         hop_radius=1,           # SAFE MODE default
         time_window_days=30,
-        max_neighbors=100
+        max_neighbors=150
     ):
         flag_date = pd.to_datetime(flag_date)
         cutoff_date = flag_date - timedelta(days=time_window_days)

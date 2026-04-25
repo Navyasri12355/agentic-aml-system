@@ -17,8 +17,8 @@ class FeatureAgent:
         for the flagged account.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, global_stats):
+        self.global_stats = global_stats
 
     # ---------------------------------------------------------
     # Main extractor
@@ -70,16 +70,38 @@ class FeatureAgent:
         timestamps = sorted(timestamps)
         amounts = np.array(amounts) if amounts else np.array([])
 
-        # txn_velocity = txns/day
+        # ----------------------------
+        # TEMPORAL FEATURES (FIXED)
+        # ----------------------------
+
+        account_edges = list(G.out_edges(account_id, data=True)) + list(G.in_edges(account_id, data=True))
+
+        timestamps = [pd.to_datetime(d["timestamp"]) for _, _, d in account_edges]
+        amounts = [d.get("amount", 0) for _, _, d in account_edges]
+
+        timestamps = sorted(timestamps)
+        amounts = np.array(amounts) if amounts else np.array([])
+
+        # ----------------------------
+        # velocity (account-level, NOT subgraph-level)
+        # ----------------------------
         if len(timestamps) > 1:
-            days = max((timestamps[-1] - timestamps[0]).days, 1)
+            days = max((max(timestamps) - min(timestamps)).days, 1)
             txn_velocity = len(timestamps) / days
         else:
             txn_velocity = float(len(timestamps))
 
-        # burst_score
+        # CAP velocity (IMPORTANT for stability)
+        txn_velocity = min(txn_velocity, 50)
+
+        # ----------------------------
+        # burst score (stable version)
+        # ----------------------------
         burst_score = self.compute_burst_score(timestamps)
 
+        # ----------------------------
+        # amount stats
+        # ----------------------------
         avg_amount = float(np.mean(amounts)) if len(amounts) > 0 else 0.0
         amount_std = float(np.std(amounts)) if len(amounts) > 0 else 0.0
 
@@ -102,10 +124,10 @@ class FeatureAgent:
             max_path_length = 0
 
         # intermediary nodes
-        num_intermediaries = 0
-        for node in G.nodes():
-            if G.in_degree(node) > 0 and G.out_degree(node) > 0:
-                num_intermediaries += 1
+        num_intermediaries = sum(
+            1 for n in G.nodes()
+            if G.in_degree(n) > 0 and G.out_degree(n) > 0 and n != account_id
+        )
 
         # ----------------------------
         # FINAL OUTPUT
@@ -137,8 +159,13 @@ class FeatureAgent:
     # Burst score = max txns in one day / avg txns per day
     # ---------------------------------------------------------
     def compute_burst_score(self, timestamps):
+        """
+        Stable burst detection:
+        avoids inflation on small samples
+        """
+
         if len(timestamps) <= 1:
-            return 1.0
+            return 0.0
 
         day_counts = {}
 
@@ -152,10 +179,12 @@ class FeatureAgent:
         avg_day = sum(values) / len(values)
 
         if avg_day == 0:
-            return 1.0
+            return 0.0
 
-        return max_day / avg_day
+        burst = max_day / avg_day
 
+        # normalize burst to 0–1 range (IMPORTANT)
+        return min(burst / 5.0, 1.0)
     # ---------------------------------------------------------
     # Empty safe output
     # ---------------------------------------------------------

@@ -16,112 +16,128 @@ class PatternAgent:
         }
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, global_stats: dict):
+        self.global_stats = global_stats
 
-    # ---------------------------------------------------------
-    # Main Detection
-    # ---------------------------------------------------------
+        # 🔥 severity map (IMPORTANT FIX)
+        self.pattern_severity = {
+            "SCATTERING": 0.6,
+            "FUNNELING": 0.7,
+            "CIRCULAR_FLOW": 0.9,
+            "LAYERING": 0.8,
+            "HIGH_VELOCITY": 0.7,
+            "SMURFING": 0.95,
+            "HIGH_RISK_COMBO": 1.0,
+            "ISOLATED_LOW_RISK": 0.2,
+            "UNCLASSIFIED": 0.1
+        }
+
     def detect_patterns(self, feature_result: dict):
+
         account_id = feature_result["account_id"]
         node_count = feature_result["subgraph_node_count"]
-
         f = feature_result["features"]
 
         patterns = []
         confidence = {}
+        severity_scores = {}
+
+        sender_mean = self.global_stats["txn_per_sender_mean"]
+        sender_std = self.global_stats["txn_per_sender_std"]
+
+        receiver_mean = self.global_stats["txn_per_receiver_mean"]
+        receiver_std = self.global_stats["txn_per_receiver_std"]
+
+        amount_mean = self.global_stats["amount_mean"]
+        amount_std_global = self.global_stats["amount_std"]
+
+        velocity_mean = self.global_stats.get("velocity_mean", sender_mean)
+        velocity_std = self.global_stats.get("velocity_std", sender_std)
 
         in_degree = f["in_degree"]
         out_degree = f["out_degree"]
-        ratio = f["in_out_ratio"]
         has_cycle = f["has_cycle"]
         avg_amount = f["avg_amount"]
         amount_std = f["amount_std"]
         num_intermediaries = f["num_intermediaries"]
-        max_path = f["max_path_length"]
+        velocity = f["txn_velocity"]
 
-        # -------------------------------------------------
-        # 1. FUNNELING
-        # Many senders -> one receiver
-        # -------------------------------------------------
-        if in_degree > 5 and ratio > 3.0:
-            patterns.append("FUNNELING")
-
-            score1 = min(in_degree / 15.0, 1.0)
-            score2 = min(ratio / 6.0, 1.0)
-
-            confidence["FUNNELING"] = round((score1 + score2) / 2, 3)
-
-        # -------------------------------------------------
-        # 2. SCATTERING
-        # One sender -> many receivers
-        # -------------------------------------------------
-        if out_degree > 5 and ratio < 0.33:
+        # -------------------------
+        # 1. SCATTERING
+        # -------------------------
+        scatter_z = (out_degree - sender_mean) / (sender_std + 1e-6)
+        if scatter_z > 2:
             patterns.append("SCATTERING")
+            confidence["SCATTERING"] = min(abs(scatter_z) / 5.0, 1.0)
 
-            score1 = min(out_degree / 15.0, 1.0)
-            score2 = min((0.33 - ratio) / 0.33, 1.0)
+        # -------------------------
+        # 2. FUNNELING
+        # -------------------------
+        funnel_z = (in_degree - receiver_mean) / (receiver_std + 1e-6)
+        if funnel_z > 2:
+            patterns.append("FUNNELING")
+            confidence["FUNNELING"] = min(abs(funnel_z) / 5.0, 1.0)
 
-            confidence["SCATTERING"] = round((score1 + score2) / 2, 3)
-
-        # -------------------------------------------------
+        # -------------------------
         # 3. CIRCULAR FLOW
-        # -------------------------------------------------
+        # -------------------------
         if has_cycle:
             patterns.append("CIRCULAR_FLOW")
-            confidence["CIRCULAR_FLOW"] = 0.90
+            confidence["CIRCULAR_FLOW"] = 0.9
 
-        # -------------------------------------------------
-        # 4. SMURFING / STRUCTURING
-        # low std + avg just below threshold
-        # -------------------------------------------------
-        if avg_amount < 10000 and amount_std < 1500 and node_count > 5:
+        # -------------------------
+        # 4. LAYERING
+        # -------------------------
+        if node_count > 5:
+            layering_ratio = num_intermediaries / node_count
+            if layering_ratio > 0.6:
+                patterns.append("LAYERING")
+                confidence["LAYERING"] = layering_ratio
+
+        # -------------------------
+        # 5. HIGH VELOCITY
+        # -------------------------
+        vel_z = (velocity - velocity_mean) / (velocity_std + 1e-6)
+        if vel_z > 2:
+            patterns.append("HIGH_VELOCITY")
+            confidence["HIGH_VELOCITY"] = min(abs(vel_z) / 5.0, 1.0)
+
+        # -------------------------
+        # 6. SMURFING
+        # -------------------------
+        amount_z = (amount_mean - avg_amount) / (amount_std_global + 1e-6)
+        if amount_z > 2 and amount_std < 0.5 * amount_std_global:
             patterns.append("SMURFING")
+            confidence["SMURFING"] = min(abs(amount_z) / 5.0, 1.0)
 
-            score1 = 1 - min(avg_amount / 10000.0, 1.0)
-            score2 = 1 - min(amount_std / 1500.0, 1.0)
+        # -------------------------
+        # 7. COMBO
+        # -------------------------
+        if "SCATTERING" in patterns and "CIRCULAR_FLOW" in patterns:
+            patterns.append("HIGH_RISK_COMBO")
+            confidence["HIGH_RISK_COMBO"] = 0.95
 
-            confidence["SMURFING"] = round((score1 + score2) / 2, 3)
-
-        # -------------------------------------------------
-        # 5. LAYERING
-        # many intermediaries + long paths
-        # -------------------------------------------------
-        if num_intermediaries > 3 and max_path > 2:
-            patterns.append("LAYERING")
-
-            score1 = min(num_intermediaries / 10.0, 1.0)
-            score2 = min(max_path / 5.0, 1.0)
-
-            confidence["LAYERING"] = round((score1 + score2) / 2, 3)
-
-        # -------------------------------------------------
-        # 6. ISOLATED / LOW RISK
-        # -------------------------------------------------
+        # -------------------------
+        # 8. ISOLATED
+        # -------------------------
         is_isolated = False
-
-        if (
-            node_count < 3 and
-            in_degree <= 1 and
-            out_degree <= 1
-        ):
+        if node_count < 3 and in_degree <= 1 and out_degree <= 1:
             patterns.append("ISOLATED_LOW_RISK")
             confidence["ISOLATED_LOW_RISK"] = 0.95
             is_isolated = True
 
-        # -------------------------------------------------
-        # If nothing matched
-        # -------------------------------------------------
         if len(patterns) == 0:
             patterns.append("UNCLASSIFIED")
-            confidence["UNCLASSIFIED"] = 0.30
+            confidence["UNCLASSIFIED"] = 0.3
 
-        # -------------------------------------------------
-        # Final Output
-        # -------------------------------------------------
+        # 🔥 attach severity
+        for p in patterns:
+            severity_scores[p] = self.pattern_severity.get(p, 0.3)
+
         return {
             "account_id": account_id,
             "detected_patterns": patterns,
             "pattern_confidence": confidence,
+            "pattern_severity": severity_scores,
             "is_isolated": is_isolated
         }
