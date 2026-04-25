@@ -3,7 +3,7 @@ import numpy as np
 import joblib
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
@@ -15,9 +15,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class DetectionAgent:
-    def __init__(self, contamination=0.02, 
-                 model_path="models/isolation_forest.joblib",
-                 flag_threshold=0.0):
+    def __init__(self, contamination: float = 0.02, 
+                 model_path: str = "models/isolation_forest.joblib",
+                 flag_threshold: float = 0.0):
         self.contamination = contamination
         self.model_path = model_path
         self.flag_threshold = flag_threshold
@@ -41,7 +41,7 @@ class DetectionAgent:
             self.load_model()
             return
             
-        logger.info(f"Training Isolation Forest model. Shape: {df.shape}, Contamination: {self.contamination}")
+        logger.info(f"Training Isolation Forest model. Shape: {df.shape}")
         
         df_train = df.copy()
         df_train['is_cross_border'] = df_train['is_cross_border'].astype(int)
@@ -57,7 +57,6 @@ class DetectionAgent:
         
         self.pipeline.fit(df_train)
         self.save_model()
-        logger.info(f"Model trained and saved to {self.model_path}")
 
     def detect(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.pipeline is None:
@@ -69,20 +68,18 @@ class DetectionAgent:
         df_detect['anomaly_score'] = self.pipeline.decision_function(df_detect)
         df_detect['is_flagged'] = df_detect['anomaly_score'] < self.flag_threshold
         
-        amount_95th = df_detect['amount_log'].quantile(0.95)
-        amount_median = df_detect['amount'].median()
+        amount_95th = df_detect['amount_log'].quantile(0.95) if len(df_detect) > 0 else 0
+        amount_median = df_detect['amount'].median() if len(df_detect) > 0 else 0
         
         def get_reason(row):
             if not row['is_flagged']:
                 return ""
-            
             if row['amount_log'] > amount_95th:
                 return "High amount outlier"
             if row['hour_of_day'] in {0, 1, 2, 3, 4, 23}:
                 return "Unusual transaction hour"
             if row['is_cross_border'] == 1 and row['amount'] > amount_median * 3:
                 return "Cross-border high value"
-            
             return "Isolation Forest anomaly"
             
         df_detect['flag_reason'] = df_detect.apply(get_reason, axis=1)
@@ -101,7 +98,7 @@ class DetectionAgent:
         recall = recall_score(y_true, y_pred, zero_division=0)
         f1 = f1_score(y_true, y_pred, zero_division=0)
         
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(y_true.unique()) > 1 else (0,0,0,0)
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
         
         metrics = {
@@ -112,9 +109,8 @@ class DetectionAgent:
             'confusion_matrix': [[int(tn), int(fp)], [int(fn), int(tp)]],
             'flagged_count': int(y_pred.sum()),
             'total_count': int(len(df)),
-            'flag_rate': float(y_pred.mean())
+            'flag_rate': float(y_pred.mean()) if len(y_pred) > 0 else 0.0
         }
-        
         return metrics
 
     def save_model(self) -> None:
@@ -127,7 +123,6 @@ class DetectionAgent:
         else:
             raise FileNotFoundError(f"No model found at {self.model_path}")
 
-
 # ================================================
 # HybridDetectionAgent - PRODUCTION MODEL
 # IF + SMOTE Random Forest
@@ -135,7 +130,7 @@ class DetectionAgent:
 # 
 # Threshold | Caught | Recall | FPR
 # 0.5       | 4,019  | 0.7865 | 0.3449
-# 0.6       | 3,194  | 0.6250 | 0.2110  <- SELECTED
+# 0.6       | 3,194  | 0.6250 | 0.2110  ← SELECTED
 # 0.7       | 2,023  | 0.3959 | 0.0968
 # 0.8       | 1,091  | 0.2135 | 0.0473
 # 0.9       |   172  | 0.0337 | 0.0217
@@ -144,18 +139,19 @@ class DetectionAgent:
 # 390x recall improvement over IF alone
 # ================================================
 class HybridDetectionAgent(DetectionAgent):
-    def __init__(self, contamination=0.02,
-                 model_path="models/isolation_forest.joblib", 
-                 rf_model_path="models/random_forest.joblib",
-                 rf_threshold=0.6,
-                 flag_threshold=0.0):
+    def __init__(self, contamination: float = 0.02,
+                 model_path: str = "models/isolation_forest.joblib", 
+                 rf_model_path: str = "models/random_forest.joblib",
+                 rf_threshold: float = 0.6,
+                 flag_threshold: float = 0.0):
         super().__init__(contamination=contamination, model_path=model_path, flag_threshold=flag_threshold)
         self.rf_model_path = rf_model_path
-        self.rf_threshold = rf_threshold
         self.rf_model = None
+        self.rf_threshold = rf_threshold
 
     def train_supervised(self, df: pd.DataFrame, force_retrain: bool = False) -> None:
         if os.path.exists(self.rf_model_path) and not force_retrain:
+            logger.info(f"Loading existing RF model from {self.rf_model_path}")
             self.rf_model = joblib.load(self.rf_model_path)
             return
 
@@ -169,14 +165,15 @@ class HybridDetectionAgent(DetectionAgent):
         smote = SMOTE(sampling_strategy=0.1, random_state=42)
         try:
             X_resampled, y_resampled = smote.fit_resample(X, y)
-        except ValueError:
+        except ValueError as e:
+            logger.warning(f"SMOTE failed: {e}. Using original data.")
             X_resampled, y_resampled = X, y
 
         self.rf_model = RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=100, 
             max_depth=10,
             class_weight='balanced',
-            random_state=42,
+            random_state=42, 
             n_jobs=-1
         )
         self.rf_model.fit(X_resampled, y_resampled)
@@ -198,13 +195,19 @@ class HybridDetectionAgent(DetectionAgent):
         X = preprocessor.transform(df)
         
         rf_probs = self.rf_model.predict_proba(X)[:, 1]
-        rf_flags = (rf_probs > self.rf_threshold).astype(bool)
         
-        rf_only_mask = rf_flags & (~df_res['is_flagged'])
-        df_res.loc[rf_only_mask, 'flag_reason'] = "Random Forest detection"
-        
-        df_res['is_flagged'] = df_res['is_flagged'] | rf_flags
-        
+        for i in range(len(df_res)):
+            rf_prob = rf_probs[i]
+            rf_flag = rf_prob > self.rf_threshold
+            if_flag = df_res.at[df_res.index[i], 'is_flagged']
+            
+            if rf_flag and not if_flag:
+                df_res.at[df_res.index[i], 'flag_reason'] = "Random Forest detection"
+            elif not rf_flag and not if_flag:
+                df_res.at[df_res.index[i], 'flag_reason'] = ""
+                
+            df_res.at[df_res.index[i], 'is_flagged'] = if_flag or rf_flag
+            
         return df_res
 
 if __name__ == "__main__":
@@ -213,27 +216,31 @@ if __name__ == "__main__":
 
     print("Running Detection Agent Demo (synthetic data)...")
     synthetic_raw = generate_synthetic_data(500)
+    
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         synthetic_raw.to_csv(tmp.name, index=False)
         tmp_path = tmp.name
         
     df_norm = normalize_ibm_amlsim(tmp_path)
-    df_clean = load_and_clean(df_norm)
+    df_processed = load_and_clean(df_norm)
     os.remove(tmp_path)
     
-    if df_clean['is_laundering'].sum() == 0:
-        df_clean.loc[df_clean.sample(25).index, 'is_laundering'] = 1
-
-    print("\n--- DetectionAgent ---")
-    if_agent = DetectionAgent(contamination=0.05)
-    if_agent.train(df_clean, force_retrain=True)
-    res_if = if_agent.detect(df_clean)
-    metrics_if = if_agent.evaluate(res_if)
-    print(f"IF Flagged: {metrics_if['flagged_count']}, Recall: {metrics_if.get('recall', 0):.4f}")
-
-    print("\n--- HybridDetectionAgent ---")
-    hybrid_agent = HybridDetectionAgent(contamination=0.05, rf_threshold=0.6)
-    hybrid_agent.train_all(df_clean, force_retrain=True)
-    res_hybrid = hybrid_agent.detect_hybrid(df_clean)
-    metrics_hybrid = hybrid_agent.evaluate(res_hybrid)
-    print(f"Hybrid Flagged: {metrics_hybrid['flagged_count']}, Recall: {metrics_hybrid.get('recall', 0):.4f}")
+    # Run DetectionAgent
+    print("\n--- Isolation Forest Baseline ---")
+    if_agent = DetectionAgent(contamination=0.02)
+    if_agent.train(df_processed, force_retrain=True)
+    df_if = if_agent.detect(df_processed)
+    if_metrics = if_agent.evaluate(df_if)
+    print(if_metrics)
+    
+    # Run HybridDetectionAgent
+    print("\n--- Hybrid Detection Agent ---")
+    hybrid_agent = HybridDetectionAgent(contamination=0.02, rf_threshold=0.6)
+    hybrid_agent.train_all(df_processed, force_retrain=True)
+    df_hybrid = hybrid_agent.detect_hybrid(df_processed)
+    hybrid_metrics = hybrid_agent.evaluate(df_hybrid)
+    print(hybrid_metrics)
+    
+    print("\n--- Side by Side Comparison ---")
+    print(f"IF Recall: {if_metrics.get('recall', 0):.4f} | IF FPR: {if_metrics.get('false_positive_rate', 0):.4f}")
+    print(f"Hybrid Recall: {hybrid_metrics.get('recall', 0):.4f} | Hybrid FPR: {hybrid_metrics.get('false_positive_rate', 0):.4f}")

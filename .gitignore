@@ -1,7 +1,46 @@
-data/ 
-models/ 
-__pycache__/ 
-*.pyc 
-.ipynb_checkpoints/ 
-.venv/
+# Dataset - too large for git
+data/raw/*.csv
+data/raw/*.txt
+
+# Processed outputs - generated locally
+data/processed/*.csv
+data/processed/*.json
+
+# Reports - generated locally  
 data/reports/*.png
+data/reports/*.jpg
+
+# Models - too large for git
+models/*.joblib
+models/*.pkl
+models/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
