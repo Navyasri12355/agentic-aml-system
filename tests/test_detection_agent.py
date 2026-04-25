@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import joblib
-from src.agents.detection_agent import DetectionAgent
+from src.agents.detection_agent import DetectionAgent, HybridDetectionAgent
 from src.pipeline.data_ingestion import generate_synthetic_data, load_and_clean, normalize_ibm_amlsim
 
 @pytest.fixture
@@ -94,3 +94,92 @@ def test_contamination_affects_flag_rate(processed_data):
     results_high = agent_high.detect(processed_data)
     
     assert results_high['is_flagged'].sum() > results_low['is_flagged'].sum()
+
+def test_hybrid_agent_trains():
+    """HybridDetectionAgent.train_all() completes without error"""
+    df_raw = generate_synthetic_data(500)
+    with open("temp_test_hybrid.csv", "w") as f:
+        df_raw.to_csv(f, index=False)
+    df_norm = normalize_ibm_amlsim("temp_test_hybrid.csv")
+    df_clean = load_and_clean(df_norm)
+    os.remove("temp_test_hybrid.csv")
+    
+    num_laundering = int(0.1 * len(df_clean))
+    curr_laundering = df_clean['is_laundering'].sum()
+    if curr_laundering < num_laundering:
+        indices = df_clean[df_clean['is_laundering'] == 0].sample(num_laundering - curr_laundering).index
+        df_clean.loc[indices, 'is_laundering'] = 1
+        
+    hybrid = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib", rf_threshold=0.6)
+    hybrid.train_all(df_clean, force_retrain=True)
+    assert hybrid.rf_model is not None
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_hybrid_detect_adds_columns():
+    """detect_hybrid() returns df with required columns"""
+    df_raw = generate_synthetic_data(500)
+    with open("temp_test_hybrid.csv", "w") as f:
+        df_raw.to_csv(f, index=False)
+    df_norm = normalize_ibm_amlsim("temp_test_hybrid.csv")
+    df_clean = load_and_clean(df_norm)
+    os.remove("temp_test_hybrid.csv")
+    
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(df_clean, force_retrain=True)
+    result = agent.detect_hybrid(df_clean)
+    assert 'anomaly_score' in result.columns
+    assert 'is_flagged' in result.columns
+    assert 'flag_reason' in result.columns
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_rf_threshold_affects_flagging():
+    """Higher rf_threshold = fewer flagged transactions"""
+    df_raw = generate_synthetic_data(500)
+    with open("temp_test_hybrid.csv", "w") as f:
+        df_raw.to_csv(f, index=False)
+    df_norm = normalize_ibm_amlsim("temp_test_hybrid.csv")
+    df_clean = load_and_clean(df_norm)
+    os.remove("temp_test_hybrid.csv")
+    
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(df_clean, force_retrain=True)
+    
+    agent.rf_threshold = 0.3
+    res_low = agent.detect_hybrid(df_clean)
+    
+    agent.rf_threshold = 0.9
+    res_high = agent.detect_hybrid(df_clean)
+    
+    assert res_low['is_flagged'].sum() > res_high['is_flagged'].sum()
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_hybrid_recall_better_than_if():
+    """Hybrid recall > IF recall on synthetic data with 10% laundering"""
+    df_raw = generate_synthetic_data(1000)
+    with open("temp_test_hybrid.csv", "w") as f:
+        df_raw.to_csv(f, index=False)
+    df_norm = normalize_ibm_amlsim("temp_test_hybrid.csv")
+    df_clean = load_and_clean(df_norm)
+    os.remove("temp_test_hybrid.csv")
+    
+    num_laundering = int(0.1 * len(df_clean))
+    curr_laundering = df_clean['is_laundering'].sum()
+    if curr_laundering < num_laundering:
+        indices = df_clean[df_clean['is_laundering'] == 0].sample(num_laundering - curr_laundering).index
+        df_clean.loc[indices, 'is_laundering'] = 1
+        
+    hybrid = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib", rf_threshold=0.6)
+    hybrid.train_all(df_clean, force_retrain=True)
+    
+    df_hybrid = hybrid.detect_hybrid(df_clean)
+    hybrid_recall = hybrid.evaluate(df_hybrid)['recall']
+    
+    df_if = hybrid.detect(df_clean)
+    if_recall = hybrid.evaluate(df_if)['recall']
+    
+    assert hybrid_recall > if_recall
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
