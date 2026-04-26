@@ -22,6 +22,10 @@ The system processes the **IBM HI-Small** dataset (~4.3 Million transactions), w
 - **Results**: The system successfully processes the full dataset, generating detailed anomaly reports in `data/processed/`.
 
 ---
+## 📋 Phase 2 Evaluation results
+<img width="479" height="596" alt="image" src="https://github.com/user-attachments/assets/0b30e67f-9844-4caa-a81c-62cb618ad894" />
+
+---
 
 ## 🚀 Getting Started
 
