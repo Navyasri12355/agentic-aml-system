@@ -38,33 +38,28 @@ class RiskAgent:
 
         raw_anomaly = self.safe_get(flagged_row, "anomaly_score", 1.0)
         anomaly_score = self.normalize_anomaly(raw_anomaly)
+        amount = self.safe_get(flagged_row, "amount", 0)
+        hour = self.safe_get(flagged_row, "hour", None)
 
         # ----------------------------
         # 🔥 IMPROVED pattern score
         # weighted severity + confidence
         # ----------------------------
-        pattern_score = 0.0
-        combo_boost = 0.0
-        if "CIRCULAR_FLOW" in patterns and "SCATTERING" in patterns:
-            combo_boost += 0.25
-
-        if "SMURFING" in patterns:
-            combo_boost += 0.20
-
         valid_patterns = [
             p for p in patterns
             if p not in ["UNCLASSIFIED", "ISOLATED_LOW_RISK"]
         ]
 
-        if valid_patterns:
-            pattern_score = sum(severity_map.get(p, 0.3) for p in valid_patterns)
-            pattern_score /= len(valid_patterns)
-        pattern_score = min(pattern_score + combo_boost, 1.0)
+        pattern_score = 0.0
+        for p in valid_patterns:
+            pattern_score += severity_map.get(p, 0.3)
+
+        pattern_score = min(pattern_score, 1.0)
 
         # ----------------------------
         #velocity
         # ----------------------------
-        velocity_score = min(features["txn_velocity"] / self.global_stats["velocity_p99"],1.0)
+        velocity_score = min(features["txn_velocity"] / 10.0, 1.0)
 
         # ----------------------------
         #cross border
@@ -77,14 +72,29 @@ class RiskAgent:
         structuring_score = 1.0 if "SMURFING" in patterns else 0.0
 
         # ----------------------------
+        #high amount detection
+        # ----------------------------
+        p99_amount = self.global_stats.get("p99_amount", 1e6)
+        high_amount_flag = 1.0 if amount > p99_amount else 0.0
+
+        # ----------------------------
+        #time anomaly
+        # ----------------------------
+        if hour is not None and hour in [0,1,2,3,4]:
+            time_risk = 1.0
+        else:
+            time_risk = 0.0
+        # ----------------------------
         #risk score
         # ----------------------------
         risk_score = (
-            self.w1 * anomaly_score +
-            self.w2 * pattern_score +
-            self.w3 * velocity_score +
-            self.w4 * cross_border_score +
-            self.w5 * structuring_score
+            0.30 * anomaly_score +        # 🔥 stronger anomaly
+            0.25 * pattern_score +
+            0.15 * velocity_score +
+            0.10 * cross_border_score +
+            0.10 * structuring_score +
+            0.10 * high_amount_flag +     # 🔥 NEW
+            0.10 * time_risk              # 🔥 NEW
         )
 
         risk_score = round(min(max(risk_score, 0), 1), 4)
@@ -120,17 +130,11 @@ class RiskAgent:
         try:
             x = float(x)
         except:
-            return 0.5
-
-        p1 = self.global_stats["anomaly_p1"]
-        p99 = self.global_stats["anomaly_p99"]
-
-        if x <= p1:
             return 0.0
-        if x >= p99:
-            return 1.0
-
-        return (x - p1) / (p99 - p1 + 1e-6)
+        p95 = self.global_stats.get("anomaly_p95", 1.0)
+        if p95 == 0:
+            return 0.0
+        return min(x / p95, 1.0)
     
     def safe_get(self, row, key, default):
         try:

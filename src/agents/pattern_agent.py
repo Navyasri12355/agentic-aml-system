@@ -29,7 +29,8 @@ class PatternAgent:
             "SMURFING": 0.95,
             "HIGH_RISK_COMBO": 1.0,
             "ISOLATED_LOW_RISK": 0.2,
-            "UNCLASSIFIED": 0.1
+            "UNCLASSIFIED": 0.1,
+            "LARGE_VALUE": 0.85
         }
 
     def detect_patterns(self, feature_result: dict):
@@ -63,52 +64,55 @@ class PatternAgent:
         velocity = f["txn_velocity"]
 
         # -------------------------
-        # 1. SCATTERING
+        # SCATTERING
         # -------------------------
-        scatter_z = (out_degree - sender_mean) / (sender_std + 1e-6)
-        if scatter_z > 2:
+        if out_degree > 5 and f["in_out_ratio"] < 0.33:
             patterns.append("SCATTERING")
-            confidence["SCATTERING"] = min(abs(scatter_z) / 5.0, 1.0)
+            confidence["SCATTERING"] = 0.8
 
         # -------------------------
-        # 2. FUNNELING
+        # FUNNELING
         # -------------------------
-        funnel_z = (in_degree - receiver_mean) / (receiver_std + 1e-6)
-        if funnel_z > 2:
+        if in_degree > 5 and f["in_out_ratio"] > 3.0:
             patterns.append("FUNNELING")
-            confidence["FUNNELING"] = min(abs(funnel_z) / 5.0, 1.0)
+            confidence["FUNNELING"] = 0.8
 
         # -------------------------
-        # 3. CIRCULAR FLOW
+        # CIRCULAR FLOW
         # -------------------------
         if has_cycle:
             patterns.append("CIRCULAR_FLOW")
             confidence["CIRCULAR_FLOW"] = 0.9
 
         # -------------------------
-        # 4. LAYERING
+        # LAYERING
         # -------------------------
-        if node_count > 5:
-            layering_ratio = num_intermediaries / node_count
-            if layering_ratio > 0.6:
-                patterns.append("LAYERING")
-                confidence["LAYERING"] = layering_ratio
+        if num_intermediaries > 3 and f["max_path_length"] > 3:
+            patterns.append("LAYERING")
+            confidence["LAYERING"] = 0.7
 
         # -------------------------
-        # 5. HIGH VELOCITY
+        # HIGH VELOCITY
         # -------------------------
-        vel_z = (velocity - velocity_mean) / (velocity_std + 1e-6)
-        if vel_z > 2:
+        if velocity > 10:
             patterns.append("HIGH_VELOCITY")
-            confidence["HIGH_VELOCITY"] = min(abs(vel_z) / 5.0, 1.0)
+            confidence["HIGH_VELOCITY"] = 0.7
 
         # -------------------------
-        # 6. SMURFING
+        # SMURFING
         # -------------------------
-        amount_z = (amount_mean - avg_amount) / (amount_std_global + 1e-6)
-        if amount_z > 2 and amount_std < 0.5 * amount_std_global:
+        if (amount_std < 0.3 * self.global_stats["amount_std"] and avg_amount < 5000 and out_degree > 5 ):
             patterns.append("SMURFING")
-            confidence["SMURFING"] = min(abs(amount_z) / 5.0, 1.0)
+            confidence["SMURFING"] = 0.9
+
+        # -------------------------
+        # LARGE VALUE TRANSFERS (🔥 NEW)
+        # -------------------------
+        p95_amount = self.global_stats.get("p95_amount", 100000)
+
+        if avg_amount > p95_amount:
+            patterns.append("LARGE_VALUE")
+            confidence["LARGE_VALUE"] = 0.85
 
         # -------------------------
         # 7. COMBO

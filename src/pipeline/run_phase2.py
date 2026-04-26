@@ -4,11 +4,13 @@ import os
 import json
 import pandas as pd
 from tqdm import tqdm
+from time import time
 
 from src.agents.graph_agent import GraphAgent
 from src.agents.feature_agent import FeatureAgent
 from src.agents.pattern_agent import PatternAgent
 from src.agents.risk_agent import RiskAgent
+from src.utils import global_stats
 from src.utils.global_stats import build_global_stats
 
 def ensure_folder(path):
@@ -94,11 +96,6 @@ def process_one_case(
     else:
         process_one_case.counter = 1
 
-    if process_one_case.counter <= 20:
-        print(
-            f"[DEBUG] Account: {account_id} | Nodes: {graph_result['node_count']} | Edges: {graph_result['edge_count']}"
-        )
-
     # -----------------------------
     # 2.2 Feature Extraction
     # -----------------------------
@@ -117,6 +114,11 @@ def process_one_case(
         feature_result=feature_result,
         pattern_result=pattern_result
     )
+    if process_one_case.counter <= 10:
+        print(f"[DEBUG] Account: {account_id} | Nodes: {graph_result['node_count']} | Edges: {graph_result['edge_count']}")
+        print(f"  Patterns: {pattern_result['detected_patterns']}")
+        print(f"  Velocity: {feature_result['features']['txn_velocity']}")
+        print(f"  Risk: {risk_result['risk_score']}\n")
 
     # -----------------------------
     # Merge outputs
@@ -160,7 +162,16 @@ def main():
     print("Loading datasets...")
 
     clean_df = pd.read_csv(clean_path)
-    flagged_df = pd.read_csv(flagged_path).iloc[575:595]
+    start_idx = 2075
+    end_idx = 2085
+    flagged_df = pd.read_csv(flagged_path).iloc[start_idx:end_idx]
+
+    # 🔥 MERGE anomaly_score from clean_df
+    if "anomaly_score" in clean_df.columns:
+        anomaly_map = clean_df.set_index("transaction_id")["anomaly_score"].to_dict()
+        if "transaction_id" in flagged_df.columns:
+            flagged_df["anomaly_score"] = flagged_df["transaction_id"].map(anomaly_map)
+            print("Merged anomaly_score into flagged_df")
 
     print("Clean transactions:", len(clean_df))
     print("Flagged transactions:", len(flagged_df))
@@ -178,11 +189,10 @@ def main():
     # -----------------------------------------------------
     # Initialize Agents
     # -----------------------------------------------------
-    print("Initializing agents...")
-
-    graph_agent = GraphAgent(clean_df)
-    feature_agent = FeatureAgent()
-    pattern_agent = PatternAgent(global_stats)
+    print("Initializing agents...") 
+    graph_agent = GraphAgent(clean_df) 
+    feature_agent = FeatureAgent(global_stats) 
+    pattern_agent = PatternAgent(global_stats) 
     risk_agent = RiskAgent(global_stats)
 
     # -----------------------------------------------------
@@ -192,7 +202,7 @@ def main():
 
     print("Running Phase 2 pipeline...")
 
-    for row in tqdm(flagged_df.itertuples(index=False), total=len(flagged_df)):
+    for row in tqdm(flagged_df.itertuples(index=False),total=len(flagged_df), desc=f"Processing {start_idx}:{end_idx}", unit="tx"):
         try:
             account_id = choose_account(row)
             flag_date = safe_timestamp(row)
@@ -205,7 +215,7 @@ def main():
                 risk_agent=risk_agent,
                 hop_radius=2,
                 time_window_days=30,
-                max_neighbors=150   # 🔥 increased
+                max_neighbors=50
             )
 
             if result is not None:
@@ -242,65 +252,45 @@ def main():
     # -----------------------------------------------------
     # MINI EVALUATION ON FIRST 100 FLAGGED ROWS
     # -----------------------------------------------------
-    print("\nRunning first-100 evaluation...")
-
-    eval_df = flagged_df.head(100).copy()
-
-    # Detect actual laundering label column
-    possible_labels = [
-        "is_laundering",
-        "Is Laundering",
-        "label",
-        "target"
-    ]
-
-    label_col = None
-    for col in possible_labels:
-        if col in eval_df.columns:
-            label_col = col
-            break
-
+    print(f"\n{start_idx}:{end_idx} {len(flagged_df)} total flagged transactions")
+    eval_df = flagged_df.copy()
+    possible_labels = ["is_laundering", "Is Laundering", "label", "target"]
+    label_col = next((col for col in possible_labels if col in eval_df.columns), None)
     if label_col is not None:
-
         actual_positive = int(eval_df[label_col].sum())
-
         investigate_count = 0
-        true_investigate_positive = 0
-
-        for _, row in eval_df.iterrows():
+        true_positive = 0
+        false_positive = 0
+        for row in tqdm(eval_df.itertuples(index=False), total=len(eval_df), desc="Evaluating"):
             try:
-                account_id = choose_account(row)
-                flag_date = safe_timestamp(row)
-                if account_id is None or flag_date is None:
-                    continue
-                else:
-                    result = process_one_case(
-                        row=row,
-                        graph_agent=graph_agent,
-                        feature_agent=feature_agent,
-                        pattern_agent=pattern_agent,
-                        risk_agent=risk_agent,
-                        hop_radius=2,
-                        time_window_days=30,
-                        max_neighbors=150
-                    )
-                if result is not None:
-                    if result["routing_decision"] == "INVESTIGATE":
-                        investigate_count += 1
-                        if int(row[label_col]) == 1:
-                            true_investigate_positive += 1
+                result = process_one_case(
+                    row=row,
+                    graph_agent=graph_agent,
+                    feature_agent=feature_agent,
+                    pattern_agent=pattern_agent,
+                    risk_agent=risk_agent,
+                    hop_radius=2,
+                    time_window_days=30,
+                    max_neighbors=50
+                )
+                if result is not None and result["routing_decision"] == "INVESTIGATE":
+                    investigate_count += 1
+                    if int(getattr(row, label_col)) == 1:
+                        true_positive += 1
+                    else:
+                        false_positive += 1
             except Exception as e:
                 print(f"[EVAL ERROR] {e}")
                 continue
-
-        print("\n--- FIRST 100 FLAGGED EVALUATION ---")
-        print("Actual laundering in first 100:", actual_positive)
-        print("Sent for investigation:", investigate_count)
-        print("True laundering among investigated:", true_investigate_positive)
-
+        missed_cases = actual_positive - true_positive
+        print(f"\n--- EVALUATION ON {len(eval_df)} TRANSACTIONS ---")
+        print(f"Actual laundering cases      : {actual_positive}")
+        print(f"Sent for investigation       : {investigate_count}")
+        print(f"True laundering investigated : {true_positive}")
+        print(f"False positives investigated : {false_positive}")
+        print(f"Missed laundering cases      : {missed_cases}")
     else:
         print("\nNo laundering label column found. Evaluation skipped.")
-
 
 if __name__ == "__main__":
     main()

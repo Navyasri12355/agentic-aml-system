@@ -19,6 +19,7 @@ def build_global_stats(clean_df):
     # Anomaly
     # -------------------------
     stats["anomaly_p1"] = clean_df["anomaly_score"].quantile(0.01)
+    stats["anomaly_p95"] = clean_df["anomaly_score"].quantile(0.95)
     stats["anomaly_p99"] = clean_df["anomaly_score"].quantile(0.99)
 
     # -------------------------
@@ -27,6 +28,12 @@ def build_global_stats(clean_df):
     stats["amount_mean"] = clean_df["amount"].mean()
     stats["amount_std"] = clean_df["amount"].std()
     stats["amount_median"] = clean_df["amount"].median()
+
+    # -------------------------
+    # Amount percentiles (🔥 ADD THIS)
+    # -------------------------
+    stats["p95_amount"] = clean_df["amount"].quantile(0.95)
+    stats["p99_amount"] = clean_df["amount"].quantile(0.99)
 
     # -------------------------
     # Network activity
