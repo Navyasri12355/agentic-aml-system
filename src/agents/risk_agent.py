@@ -1,6 +1,8 @@
-# File: src/agents/risk_agent.py - TWO-STAGE CLASSIFIER
+# File: src/agents/risk_agent.py - TWO-STAGE CLASSIFIER WITH ENHANCED OUTPUT
 
 import math
+import pandas as pd
+from datetime import datetime
 
 class RiskAgent:
     """
@@ -11,13 +13,27 @@ class RiskAgent:
     def __init__(self, global_stats: dict):
         self.global_stats = global_stats
 
-    def compute_risk(self, flagged_row, feature_result, pattern_result):
-
+    def compute_risk(self, flagged_row, feature_result, pattern_result, graph_result=None, transaction_id=None):
+        """
+        Compute risk score and routing decision
+        
+        Parameters:
+        - flagged_row: Single transaction row from flagged dataset
+        - feature_result: Output from FeatureAgent
+        - pattern_result: Output from PatternAgent  
+        - graph_result: Output from GraphAgent (optional, for frontend visualization)
+        - transaction_id: Transaction ID (optional, will extract from flagged_row if not provided)
+        """
+        
         account_id = feature_result["account_id"]
         features = feature_result["features"]
         patterns = pattern_result["detected_patterns"]
         severity_map = pattern_result.get("pattern_severity", {})
 
+        # Extract transaction_id if not provided
+        if transaction_id is None:
+            transaction_id = self.safe_get(flagged_row, "transaction_id", f"UNKNOWN_{account_id}")
+        
         raw_anomaly = self.safe_get(flagged_row, "anomaly_score", 1.0)
         anomaly_score = self.normalize_anomaly(raw_anomaly)
         amount = self.safe_get(flagged_row, "amount", 0)
@@ -76,15 +92,15 @@ class RiskAgent:
             # Lower thresholds for ML detections
             high_threshold = 0.48
             med_threshold = 0.35
+            flag_type = "ML"
             
         elif is_high_amount:
             # High amount alerts are often false positives - be conservative
-            # Anomaly score must be significant
             if anomaly_score < 0.15:
-                risk_score = 0.0  # Immediate EXIT
+                risk_score = 0.0
             else:
                 risk_score = (
-                    0.50 * anomaly_score +      # Anomaly dominates
+                    0.50 * anomaly_score +
                     0.20 * pattern_score +
                     0.10 * velocity_score +
                     0.05 * cross_border_score +
@@ -92,15 +108,14 @@ class RiskAgent:
                     0.05 * time_risk
                 )
             
-            # High thresholds for high amount alerts
             high_threshold = 0.65
             med_threshold = 0.45
+            flag_type = "HIGH_AMOUNT"
             
         elif is_unusual_hour:
-            # Unusual hour alerts are mostly false positives - very conservative
-            # Must have strong patterns AND decent anomaly
+            # Unusual hour alerts are mostly false positives
             if anomaly_score < 0.20 or len(valid_patterns) < 2:
-                risk_score = 0.0  # Immediate EXIT
+                risk_score = 0.0
             else:
                 risk_score = (
                     0.45 * anomaly_score +
@@ -110,9 +125,9 @@ class RiskAgent:
                     0.05 * amount_score
                 )
             
-            # Very high thresholds
             high_threshold = 0.70
             med_threshold = 0.55
+            flag_type = "UNUSUAL_HOUR"
             
         else:
             # Default fallback
@@ -126,6 +141,7 @@ class RiskAgent:
             )
             high_threshold = 0.55
             med_threshold = 0.35
+            flag_type = "DEFAULT"
 
         risk_score = min(1.0, max(0.0, risk_score))
 
@@ -140,18 +156,81 @@ class RiskAgent:
             tier = "HIGH"
             routing = "INVESTIGATE"
 
-        return {
+        # Create base result
+        result = {
+            "transaction_id": transaction_id,
             "account_id": account_id,
             "risk_score": round(risk_score, 3),
             "risk_tier": tier,
             "score_components": {
                 "anomaly_score": round(anomaly_score, 4),
                 "pattern_score": round(pattern_score, 4),
-                "flag_type": "ML" if is_ml_detection else ("HIGH_AMOUNT" if is_high_amount else "UNUSUAL_HOUR"),
-                "routing_decision": routing
+                "velocity_score": round(velocity_score, 4),
+                "cross_border_score": round(cross_border_score, 4),
+                "amount_score": round(amount_score, 4),
+                "time_risk": round(time_risk, 4),
+                "flag_type": flag_type
             },
-            "routing_decision": routing
+            "routing_decision": routing,
+            "pattern_confidence": pattern_result.get("pattern_confidence", {}),
+            "detected_patterns": patterns
         }
+        
+        # Add enhanced fields for Phase 3-5 (if graph_result is provided)
+        if graph_result is not None:
+            # Get the actual graph object
+            G = graph_result.get("graph")
+            
+            # Prepare graph data for frontend
+            graph_data = {"nodes": [], "edges": []}
+            if G is not None:
+                # Limit nodes to 50 for performance
+                nodes = list(G.nodes())[:50]
+                graph_data["nodes"] = [
+                    {"id": str(node), "label": str(node)[:8], "degree": G.degree(node)} 
+                    for node in nodes
+                ]
+                
+                # Limit edges to 100 for performance
+                edges = list(G.edges(data=True))[:100]
+                graph_data["edges"] = [
+                    {
+                        "source": str(u), 
+                        "target": str(v), 
+                        "amount": data.get("amount", 0),
+                        "timestamp": str(data.get("timestamp", ""))
+                    }
+                    for u, v, data in edges
+                ]
+            
+            # Add Phase 3-5 fields
+            result.update({
+                "investigation_id": f"INV_{transaction_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "investigation_timestamp": datetime.now().isoformat(),
+                "pipeline_version": "2.0",
+                "sar_ready": tier in ["HIGH", "MEDIUM"],
+                "sar_narrative": None,
+                "sar_generated_at": None,
+                "graph_data": graph_data,
+                "routing_reason": self.generate_routing_reason(routing, risk_score, patterns),
+                "processing_time_ms": 0,
+                "agent_timeline": {
+                    "graph_agent": 0,
+                    "feature_agent": 0,
+                    "pattern_agent": 0,
+                    "risk_agent": 0
+                }
+            })
+        
+        return result
+
+    def generate_routing_reason(self, routing_decision, risk_score, patterns):
+        """Generate human-readable reason for routing decision"""
+        if routing_decision == "INVESTIGATE":
+            pattern_list = patterns[:3] if patterns else ["no specific patterns"]
+            return f"High risk score ({risk_score:.2f}) with patterns: {', '.join(pattern_list)}"
+        else:
+            return f"Risk score ({risk_score:.2f}) below threshold, no actionable patterns"
 
     def normalize_anomaly(self, x):
         """Original working normalization"""
@@ -171,10 +250,13 @@ class RiskAgent:
         return round(norm, 4)
     
     def safe_get(self, row, key, default):
+        """Safely get value from row (dict or object)"""
         try:
+            # Try dictionary access
             return row[key]
-        except:
+        except (TypeError, KeyError):
             try:
+                # Try attribute access
                 return getattr(row, key)
-            except:
+            except AttributeError:
                 return default
