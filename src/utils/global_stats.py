@@ -6,14 +6,17 @@ def build_global_stats(clean_df):
     clean_df["timestamp"] = pd.to_datetime(clean_df["timestamp"])
 
     # -------------------------
-    # Velocity (FIXED: derived properly)
+    # Velocity per account
     # -------------------------
-    tx_per_day = len(clean_df) / ((clean_df["timestamp"].max() - clean_df["timestamp"].min()).days + 1)
+    sender_counts = clean_df.groupby("sender_id").size()
+    receiver_counts = clean_df.groupby("receiver_id").size()
 
-    stats["velocity_mean"] = tx_per_day
-    stats["velocity_std"] = tx_per_day * 0.5
-    stats["velocity_p95"] = tx_per_day * 2
-    stats["velocity_p99"] = tx_per_day * 3
+    account_activity = sender_counts.add(receiver_counts, fill_value=0)
+
+    stats["velocity_mean"] = account_activity.mean()
+    stats["velocity_std"] = account_activity.std()
+    stats["velocity_p95"] = account_activity.quantile(0.95)
+    stats["velocity_p99"] = account_activity.quantile(0.99)
 
     # -------------------------
     # Anomaly

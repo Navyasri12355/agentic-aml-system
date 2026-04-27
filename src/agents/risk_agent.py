@@ -1,4 +1,5 @@
 # File: src/agents/risk_agent.py
+import math
 
 class RiskAgent:
     """
@@ -49,17 +50,20 @@ class RiskAgent:
             p for p in patterns
             if p not in ["UNCLASSIFIED", "ISOLATED_LOW_RISK"]
         ]
-
         pattern_score = 0.0
-        for p in valid_patterns:
-            pattern_score += severity_map.get(p, 0.3)
-
-        pattern_score = min(pattern_score, 1.0)
+        if valid_patterns:
+            pattern_score = sum(severity_map[p] for p in valid_patterns) / len(valid_patterns)
+        else:
+            pattern_score = 0.1
 
         # ----------------------------
         #velocity
         # ----------------------------
-        velocity_score = min(features["txn_velocity"] / 10.0, 1.0)
+        v = features["txn_velocity"]
+        v_mean = self.global_stats.get("velocity_mean", 1)
+        v_std = self.global_stats.get("velocity_std", 1)
+        v_p95 = self.global_stats.get("velocity_p95", v_mean + 2 * v_std)
+        velocity_score = min(1.0, v / (v_p95 + 1e-6))
 
         # ----------------------------
         #cross border
@@ -67,15 +71,11 @@ class RiskAgent:
         cross_border_score = self.safe_get(flagged_row, "is_cross_border", 0)
 
         # ----------------------------
-        #structuring
-        # ----------------------------
-        structuring_score = 1.0 if "SMURFING" in patterns else 0.0
-
-        # ----------------------------
         #high amount detection
         # ----------------------------
         p99_amount = self.global_stats.get("p99_amount", 1e6)
-        high_amount_flag = 1.0 if amount > p99_amount else 0.0
+        high_amount_flag = math.log1p(amount) / math.log1p(p99_amount + 1e-6)
+        high_amount_flag = min(1.0, high_amount_flag)
 
         # ----------------------------
         #time anomaly
@@ -88,25 +88,31 @@ class RiskAgent:
         #risk score
         # ----------------------------
         risk_score = (
-            0.30 * anomaly_score +        # 🔥 stronger anomaly
-            0.25 * pattern_score +
-            0.15 * velocity_score +
-            0.10 * cross_border_score +
-            0.10 * structuring_score +
-            0.10 * high_amount_flag +     # 🔥 NEW
-            0.10 * time_risk              # 🔥 NEW
+            0.30 * max(anomaly_score, 0.001) +
+            0.40 * pattern_score +
+            0.10 * velocity_score +
+            0.05 * cross_border_score +
+            0.05 * high_amount_flag +
+            0.05 * time_risk
         )
+        risk_score = round(min(max(risk_score, 0), 1), 2)
 
-        risk_score = round(min(max(risk_score, 0), 1), 4)
+        if "CIRCULAR_FLOW" in patterns and "LARGE_VALUE" in patterns:
+            risk_score += 0.10
+
+        if anomaly_score > 0.8 and pattern_score > 0.7:
+            risk_score += 0.10
+        
+        risk_score = min(1.0, risk_score)
 
         # 🔥 FIXED routing (IMPORTANT)
-        if risk_score < 0.3:
+        if risk_score < 0.35:
             tier = "LOW"
             routing = "EXIT"
 
-        elif risk_score < 0.6:
+        elif risk_score < 0.55:
             tier = "MEDIUM"
-            routing = "INVESTIGATE"   # FIXED
+            routing = "EXIT" 
 
         else:
             tier = "HIGH"
@@ -120,8 +126,7 @@ class RiskAgent:
                 "anomaly_score": round(anomaly_score, 4),
                 "pattern_score": round(pattern_score, 4),
                 "velocity_score": round(velocity_score, 4),
-                "cross_border_score": round(cross_border_score, 4),
-                "structuring_score": round(structuring_score, 4)
+                "cross_border_score": round(cross_border_score, 4)
             },
             "routing_decision": routing
         }
@@ -131,10 +136,14 @@ class RiskAgent:
             x = float(x)
         except:
             return 0.0
+        p1 = self.global_stats.get("anomaly_p1", 0.0)
         p95 = self.global_stats.get("anomaly_p95", 1.0)
-        if p95 == 0:
+        if p95 - p1 == 0:
             return 0.0
-        return min(x / p95, 1.0)
+        # robust scaling (winsorized min-max)
+        x = max(min(x, p95), p1)
+        norm = ((x - p1) / (p95 - p1))** 0.7
+        return round(norm, 4)
     
     def safe_get(self, row, key, default):
         try:

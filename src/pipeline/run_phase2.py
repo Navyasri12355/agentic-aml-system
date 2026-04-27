@@ -66,7 +66,7 @@ def process_one_case(
     risk_agent,
     hop_radius=2,
     time_window_days=30,
-    max_neighbors=150
+    max_neighbors=50
 ):
     """
     Runs complete Phase 2 for one flagged transaction.
@@ -166,13 +166,6 @@ def main():
     end_idx = 2085
     flagged_df = pd.read_csv(flagged_path).iloc[start_idx:end_idx]
 
-    # 🔥 MERGE anomaly_score from clean_df
-    if "anomaly_score" in clean_df.columns:
-        anomaly_map = clean_df.set_index("transaction_id")["anomaly_score"].to_dict()
-        if "transaction_id" in flagged_df.columns:
-            flagged_df["anomaly_score"] = flagged_df["transaction_id"].map(anomaly_map)
-            print("Merged anomaly_score into flagged_df")
-
     print("Clean transactions:", len(clean_df))
     print("Flagged transactions:", len(flagged_df))
 
@@ -250,38 +243,26 @@ def main():
         print(risk_df["risk_tier"].value_counts())
 
     # -----------------------------------------------------
-    # MINI EVALUATION ON FIRST 100 FLAGGED ROWS
+    # MINI EVALUATION
     # -----------------------------------------------------
     print(f"\n{start_idx}:{end_idx} {len(flagged_df)} total flagged transactions")
     eval_df = flagged_df.copy()
     possible_labels = ["is_laundering", "Is Laundering", "label", "target"]
     label_col = next((col for col in possible_labels if col in eval_df.columns), None)
     if label_col is not None:
-        actual_positive = int(eval_df[label_col].sum())
-        investigate_count = 0
-        true_positive = 0
-        false_positive = 0
-        for row in tqdm(eval_df.itertuples(index=False), total=len(eval_df), desc="Evaluating"):
-            try:
-                result = process_one_case(
-                    row=row,
-                    graph_agent=graph_agent,
-                    feature_agent=feature_agent,
-                    pattern_agent=pattern_agent,
-                    risk_agent=risk_agent,
-                    hop_radius=2,
-                    time_window_days=30,
-                    max_neighbors=50
-                )
-                if result is not None and result["routing_decision"] == "INVESTIGATE":
-                    investigate_count += 1
-                    if int(getattr(row, label_col)) == 1:
-                        true_positive += 1
-                    else:
-                        false_positive += 1
-            except Exception as e:
-                print(f"[EVAL ERROR] {e}")
-                continue
+        # flatten results
+        risk_df = pd.DataFrame(flat_results)
+        # merge predictions back
+        merged = eval_df.merge(
+            risk_df[["transaction_id", "routing_decision"]],
+            on="transaction_id",
+            how="left"
+        )
+        actual_positive = int(merged[label_col].sum())
+        investigate_df = merged[merged["routing_decision"] == "INVESTIGATE"]
+        investigate_count = len(investigate_df)
+        true_positive = int(investigate_df[label_col].sum())
+        false_positive = investigate_count - true_positive
         missed_cases = actual_positive - true_positive
         print(f"\n--- EVALUATION ON {len(eval_df)} TRANSACTIONS ---")
         print(f"Actual laundering cases      : {actual_positive}")
@@ -291,6 +272,5 @@ def main():
         print(f"Missed laundering cases      : {missed_cases}")
     else:
         print("\nNo laundering label column found. Evaluation skipped.")
-
 if __name__ == "__main__":
     main()
