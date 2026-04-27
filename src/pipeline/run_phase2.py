@@ -56,7 +56,7 @@ def process_one_case(
     risk_agent,
     hop_radius=1,
     time_window_days=30,
-    max_neighbors=100
+    max_neighbors=50
 ):
     """
     Runs complete Phase 2 for one flagged transaction.
@@ -139,7 +139,9 @@ def main():
     print("Loading datasets...")
 
     clean_df = pd.read_csv(clean_path)
-    flagged_df = pd.read_csv(flagged_path).head(10000)
+    start_idx = 575
+    end_idx = 595
+    flagged_df = pd.read_csv(flagged_path).iloc[start_idx:end_idx]
 
     print("Clean transactions:", len(clean_df))
     print("Flagged transactions:", len(flagged_df))
@@ -209,8 +211,8 @@ def main():
         print("\nRisk Tier Counts:")
         print(risk_df["risk_tier"].value_counts())
 
-        # -----------------------------------------------------
-    # MINI EVALUATION ON FIRST 100 FLAGGED ROWS
+    # -----------------------------------------------------
+    # MINI EVALUATION
     # -----------------------------------------------------
     print("\nRunning first-100 evaluation...")
 
@@ -231,44 +233,27 @@ def main():
             break
 
     if label_col is not None:
-
-        actual_positive = int(eval_df[label_col].sum())
-
-        investigate_count = 0
-        true_investigate_positive = 0
-
-        for _, row in eval_df.iterrows():
-
-            try:
-                result = process_one_case(
-                    row=row,
-                    graph_agent=graph_agent,
-                    feature_agent=feature_agent,
-                    pattern_agent=pattern_agent,
-                    risk_agent=risk_agent,
-                    hop_radius=1,
-                    time_window_days=30,
-                    max_neighbors=100
-                )
-
-                if result is not None:
-                    if result["routing_decision"] == "INVESTIGATE":
-                        investigate_count += 1
-
-                        if int(row[label_col]) == 1:
-                            true_investigate_positive += 1
-
-            except:
-                continue
-
-        print("\n--- FIRST 100 FLAGGED EVALUATION ---")
-        print("Actual laundering in first 100:", actual_positive)
-        print("Sent for investigation:", investigate_count)
-        print("True laundering among investigated:", true_investigate_positive)
-
+        # flatten results
+        risk_df = pd.DataFrame(flat_results)
+        # merge predictions back
+        merged = eval_df.merge(
+            risk_df[["transaction_id", "routing_decision"]],
+            on="transaction_id",
+            how="left"
+        )
+        actual_positive = int(merged[label_col].sum())
+        investigate_df = merged[merged["routing_decision"] == "INVESTIGATE"]
+        investigate_count = len(investigate_df)
+        true_positive = int(investigate_df[label_col].sum())
+        false_positive = investigate_count - true_positive
+        missed_cases = actual_positive - true_positive
+        print(f"\n--- EVALUATION ON {len(eval_df)} TRANSACTIONS ---")
+        print(f"Actual laundering cases      : {actual_positive}")
+        print(f"Sent for investigation       : {investigate_count}")
+        print(f"True laundering investigated : {true_positive}")
+        print(f"False positives investigated : {false_positive}")
+        print(f"Missed laundering cases      : {missed_cases}")
     else:
         print("\nNo laundering label column found. Evaluation skipped.")
-
-
 if __name__ == "__main__":
     main()

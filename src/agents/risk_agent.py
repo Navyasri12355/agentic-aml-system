@@ -1,5 +1,8 @@
 # File: src/agents/risk_agent.py
 
+import math
+
+
 class RiskAgent:
     """
     Phase 2.4 Risk Scoring Agent
@@ -59,14 +62,21 @@ class RiskAgent:
             p for p in patterns
             if p not in ["UNCLASSIFIED", "ISOLATED_LOW_RISK"]
         ]
+        pattern_score = 0.0
+        if patterns == ["UNCLASSIFIED"]:
+            pattern_score = 0.1
+        else:
+            pattern_score = sum(severity_map.get(p, 0.3) for p in valid_patterns)
+            pattern_score = min(pattern_score, 1.0)
 
-        pattern_score = min(len(set(useful_patterns)) * 0.30, 1.0)
-
-        # -------------------------------------------------
-        # 3. velocity_score
-        # -------------------------------------------------
-        txn_velocity = features["txn_velocity"]
-        velocity_score = min(txn_velocity / 10.0, 1.0)
+        # ----------------------------
+        #velocity
+        # ----------------------------
+        v = features["txn_velocity"]
+        v_mean = self.global_stats.get("velocity_mean", 1)
+        v_std = self.global_stats.get("velocity_std", 1)
+        v_p95 = self.global_stats.get("velocity_p95", v_mean + 2 * v_std)
+        velocity_score = min(1.0, v / (v_p95 + 1e-6))
 
         # -------------------------------------------------
         # 4. cross_border_score
@@ -83,29 +93,50 @@ class RiskAgent:
         # -------------------------------------------------
         structuring_score = 1.0 if "SMURFING" in patterns else 0.0
 
-        # -------------------------------------------------
-        # Weighted total
-        # -------------------------------------------------
+        # ----------------------------
+        #high amount detection
+        # ----------------------------
+        p99_amount = self.global_stats.get("p99_amount", 1e6)
+        high_amount_flag = math.log1p(amount) / math.log1p(p99_amount + 1e-6)
+        high_amount_flag = min(1.0, high_amount_flag)
+
+        # ----------------------------
+        #time anomaly
+        # ----------------------------
+        if hour is not None and hour in [0,1,2,3,4]:
+            time_risk = 1.0
+        else:
+            time_risk = 0.0
+        # ----------------------------
+        #risk score
+        # ----------------------------
         risk_score = (
-            self.w1 * anomaly_score +
-            self.w2 * pattern_score +
-            self.w3 * velocity_score +
-            self.w4 * cross_border_score +
-            self.w5 * structuring_score
+            0.30 * max(anomaly_score, 0.001) +
+            0.40 * pattern_score +
+            0.10 * velocity_score +
+            0.05 * cross_border_score +
+            0.05 * structuring_score +
+            0.05 * high_amount_flag +
+            0.05 * time_risk
         )
+        risk_score = round(min(max(risk_score, 0), 1), 2)
 
-        risk_score = round(min(max(risk_score, 0.0), 1.0), 4)
+        if "CIRCULAR_FLOW" in patterns and "LARGE_VALUE" in patterns:
+            risk_score += 0.10
 
-        # -------------------------------------------------
-        # Tiering
-        # -------------------------------------------------
+        if anomaly_score > 0.8 and pattern_score > 0.7:
+            risk_score += 0.10
+        
+        risk_score = min(1.0, risk_score)
+
+        # 🔥 FIXED routing (IMPORTANT)
         if risk_score < 0.35:
-            risk_tier = "LOW"
+            tier = "LOW"
             routing = "EXIT"
 
-        elif risk_score < 0.65:
-            risk_tier = "MEDIUM"
-            routing = "EXIT"
+        elif risk_score < 0.55:
+            tier = "MEDIUM"
+            routing = "EXIT" 
 
         else:
             risk_tier = "HIGH"
@@ -140,18 +171,16 @@ class RiskAgent:
         try:
             x = float(x)
         except:
-            return 1.0
-
-        # already probability-like
-        if 0 <= x <= 1:
-            return x
-
-        # convert arbitrary value to bounded score
-        return 1 / (1 + abs(x))
-
-    # ---------------------------------------------------------
-    # Safe getter for pandas row / dict
-    # ---------------------------------------------------------
+            return 0.0
+        p1 = self.global_stats.get("anomaly_p1", 0.0)
+        p95 = self.global_stats.get("anomaly_p95", 1.0)
+        if p95 - p1 == 0:
+            return 0.0
+        # robust scaling (winsorized min-max)
+        x = max(min(x, p95), p1)
+        norm = (x - p1) / (p95 - p1)
+        return round(norm, 4)
+    
     def safe_get(self, row, key, default):
         try:
             return row[key]
