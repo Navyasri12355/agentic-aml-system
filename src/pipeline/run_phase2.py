@@ -162,8 +162,8 @@ def main():
     print("Loading datasets...")
 
     clean_df = pd.read_csv(clean_path)
-    start_idx = 2075
-    end_idx = 2085
+    start_idx = 24300
+    end_idx = 24320
     flagged_df = pd.read_csv(flagged_path).iloc[start_idx:end_idx]
 
     print("Clean transactions:", len(clean_df))
@@ -178,6 +178,9 @@ def main():
 
     if "timestamp" in flagged_df.columns:
         flagged_df["timestamp"] = pd.to_datetime(flagged_df["timestamp"])
+
+    if "hour_of_day" in flagged_df.columns:
+        flagged_df["hour"] = flagged_df["hour_of_day"]  # Create alias for consistency
 
     # -----------------------------------------------------
     # Initialize Agents

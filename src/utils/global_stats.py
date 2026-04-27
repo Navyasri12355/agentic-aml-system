@@ -24,6 +24,9 @@ def build_global_stats(clean_df):
     stats["anomaly_p1"] = clean_df["anomaly_score"].quantile(0.01)
     stats["anomaly_p95"] = clean_df["anomaly_score"].quantile(0.95)
     stats["anomaly_p99"] = clean_df["anomaly_score"].quantile(0.99)
+    stats["anomaly_p10"] = clean_df["anomaly_score"].quantile(0.10)
+    stats["anomaly_p50"] = clean_df["anomaly_score"].quantile(0.50)
+    stats["anomaly_p90"] = clean_df["anomaly_score"].quantile(0.90)
 
     # -------------------------
     # Amount
