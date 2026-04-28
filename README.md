@@ -44,9 +44,11 @@ pip install -r requirements.txt
 ```
 
 7. Download dataset:
-Download HI-Small_Trans.csv from:
-[https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml] (https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml)
-Place at: data/raw/HI-Small_Trans.csv
+Download `HI-Small_Trans.csv` from:  
+https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml  
+
+Place it at:
+data/raw/HI-Small_Trans.csv
 
 ### Running Phase 1
 
@@ -71,11 +73,11 @@ jupyter notebook:
 ### Output Files
 | File | Description |
 |------|-------------|
-| [data/processed/flagged_hybrid_final.csv] (data/processed/flagged_hybrid_final.csv) | Phase 2 input |
-| [data/processed/flagged_if_baseline.csv] (data/processed/flagged_if_baseline.csv) | IF baseline comparison |
-| [data/processed/phase1_full_results.csv] (data/processed/phase1_full_results.csv) | Full dataset with scores |
-| [models/isolation_forest.joblib] (models/isolation_forest.joblib) | Trained IF model |
-| [models/random_forest.joblib] (models/random_forest.joblib) | Trained RF model |
+| [flagged_hybrid_final.csv](https://github.com/Navyasri12355/agentic-aml-system/blob/main/data/processed/flagged_hybrid_final.csv) | Phase 2 input |
+| [flagged_if_baseline.csv](https://github.com/Navyasri12355/agentic-aml-system/blob/main/data/processed/flagged_if_baseline.csv) | IF baseline comparison |
+| [phase1_full_results.csv](https://github.com/Navyasri12355/agentic-aml-system/blob/main/data/processed/phase1_full_results.csv) | Full dataset with scores |
+| [isolation_forest.joblib](https://github.com/Navyasri12355/agentic-aml-system/blob/main/models/isolation_forest.joblib) | Trained IF model |
+| [random_forest.joblib](https://github.com/Navyasri12355/agentic-aml-system/blob/main/models/random_forest.joblib) | Trained RF model |
 
 ### Tech Stack
 - Python 3.x
