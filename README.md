@@ -142,3 +142,10 @@ jupyter notebook notebooks/
 - **ML**: Scikit-Learn (Isolation Forest)
 - **Testing**: Pytest, Joblib
 - **Visualization**: Matplotlib, Seaborn, Jupyter
+
+### Phases
+- [x] Phase 1: Data Ingestion + Detection Agent
+- [x] Phase 2: Graph Construction + Investigation Agent
+- [ ] Phase 3: LangGraph Orchestration
+- [ ] Phase 4: Explanation Agent + SAR Generation
+- [ ] Phase 5: Frontend + Evaluation

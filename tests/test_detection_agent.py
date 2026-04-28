@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import joblib
-from src.agents.detection_agent import DetectionAgent
+from src.agents.detection_agent import DetectionAgent, HybridDetectionAgent
 from src.pipeline.data_ingestion import generate_synthetic_data, load_and_clean, normalize_ibm_amlsim
 
 @pytest.fixture
@@ -94,3 +94,73 @@ def test_contamination_affects_flag_rate(processed_data):
     results_high = agent_high.detect(processed_data)
     
     assert results_high['is_flagged'].sum() > results_low['is_flagged'].sum()
+
+@pytest.fixture
+def hybrid_data():
+    """Returns a processed DataFrame for hybrid testing (500 rows)."""
+    df_raw = generate_synthetic_data(500)
+    with open("temp_test_hybrid.csv", "w") as f:
+        df_raw.to_csv(f, index=False)
+    df_norm = normalize_ibm_amlsim("temp_test_hybrid.csv")
+    df_clean = load_and_clean(df_norm)
+    os.remove("temp_test_hybrid.csv")
+    
+    # Ensure 10% laundering
+    num_laundering = int(0.1 * len(df_clean))
+    current_laundering = df_clean['is_laundering'].sum()
+    if current_laundering < num_laundering:
+        indices_to_change = df_clean[df_clean['is_laundering'] == 0].sample(num_laundering - current_laundering).index
+        df_clean.loc[indices_to_change, 'is_laundering'] = 1
+    
+    return df_clean
+
+def test_hybrid_agent_trains(hybrid_data):
+    """HybridDetectionAgent trains both IF and RF without error"""
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(hybrid_data, force_retrain=True)
+    assert os.path.exists("models/test_rf_model.joblib")
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_hybrid_detect_adds_columns(hybrid_data):
+    """detect_hybrid() adds anomaly_score, is_flagged, flag_reason"""
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(hybrid_data, force_retrain=True)
+    results = agent.detect_hybrid(hybrid_data)
+    assert 'anomaly_score' in results.columns
+    assert 'is_flagged' in results.columns
+    assert 'flag_reason' in results.columns
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_hybrid_recall_better_than_if(hybrid_data):
+    """Hybrid recall on synthetic data > IF recall"""
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(hybrid_data, force_retrain=True)
+    
+    df_if = agent.detect(hybrid_data)
+    metrics_if = agent.evaluate(df_if)
+    
+    df_hybrid = agent.detect_hybrid(hybrid_data)
+    metrics_hybrid = agent.evaluate(df_hybrid)
+    
+    assert metrics_hybrid['recall'] >= metrics_if['recall']
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
+
+def test_rf_threshold_affects_flagging(hybrid_data):
+    """Higher rf_threshold results in fewer flagged transactions"""
+    agent = HybridDetectionAgent(rf_model_path="models/test_rf_model.joblib")
+    agent.train_all(hybrid_data, force_retrain=True)
+    
+    agent.rf_threshold = 0.5
+    res_05 = agent.detect_hybrid(hybrid_data)
+    count_05 = res_05['is_flagged'].sum()
+    
+    agent.rf_threshold = 0.9
+    res_09 = agent.detect_hybrid(hybrid_data)
+    count_09 = res_09['is_flagged'].sum()
+    
+    assert count_09 <= count_05
+    if os.path.exists("models/test_rf_model.joblib"):
+        os.remove("models/test_rf_model.joblib")
