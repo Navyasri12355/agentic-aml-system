@@ -45,7 +45,7 @@ pip install -r requirements.txt
 
 7. Download dataset:
 Download HI-Small_Trans.csv from:
-https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml[https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml]
+https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml [https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml]
 Place at: data/raw/HI-Small_Trans.csv
 
 ### Running Phase 1
