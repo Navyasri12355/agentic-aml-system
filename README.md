@@ -63,12 +63,13 @@ python -m pytest tests/ -v
 ```
 
 Run EDA notebook:
+
 jupyter notebook:
-[notebooks/phase1_eda.ipynb] (notebooks/phase1_eda.ipynb)
+[notebooks/phase1_eda.ipynb](https://github.com/Navyasri12355/agentic-aml-system/blob/main/notebooks/phase1_detection_eval.ipynb)
 
 Run detection eval notebook:
 jupyter notebook:
-[notebooks/phase1_detection_eval.ipynb] (notebooks/phase1_detection_eval.ipynb)
+[notebooks/phase1_detection_eval.ipynb](https://github.com/Navyasri12355/agentic-aml-system/blob/main/notebooks/phase1_eda.ipynb)
 
 ### Output Files
 | File | Description |
