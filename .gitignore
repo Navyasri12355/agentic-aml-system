@@ -1,35 +1,33 @@
+# Dataset - too large for git
+data/raw/*.csv
+data/raw/*.txt
+
+# Processed outputs - generated locally
+data/processed/*.csv
+data/processed/*.json
+
+# Reports - generated locally  
+data/reports/*.png
+data/reports/*.jpg
+
+# Models - too large for git
+models/*.joblib
+models/*.pkl
+models/*.json
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
 .Python
-*.egg
 *.egg-info/
 dist/
 build/
-.eggs/
-.venv/
+
+# Virtual environment
 venv/
+.venv/
 env/
-ENV/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Models (too large for git — use DVC or store separately)
-models/*.joblib
-models/*.pkl
-models/*.bin
-
-# Data (raw data should not be committed)
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/reports/.gitkeep
 
 # Jupyter
 .ipynb_checkpoints/
@@ -39,21 +37,10 @@ data/processed/*
 .vscode/
 .idea/
 *.swp
-*.swo
+
+# OS
 .DS_Store
+Thumbs.db
 
 # Logs
 *.log
-logs/
-
-# Coverage
-.coverage
-htmlcov/
-.pytest_cache/
-
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/.env
-frontend/.env.local

@@ -1,162 +1,182 @@
-"""
-graph_agent.py
---------------
-Phase 2: Build a directed transaction graph from flagged transactions
-and expand context to multi-hop neighbouring accounts.
+# File: src/agents/graph_agent.py
 
-Input:
-    flagged_df  : DataFrame of flagged transactions (from detection_agent.py)
-    all_df      : Full cleaned DataFrame (for context expansion)
-    account_id  : The account under investigation
-    hop_radius  : How many hops to expand (default: 2)
-    time_window_days : How many days back to include (default: 30)
-
-Output:
-    networkx.DiGraph with:
-        Nodes : account IDs
-            attrs: total_sent, total_received, degree
-        Edges : transactions
-            attrs: amount, timestamp, transaction_type, transaction_id
-"""
-
-import logging
-from datetime import timedelta
-from typing import Optional
-
-import networkx as nx
 import pandas as pd
+import networkx as nx
+from datetime import timedelta
 
-logger = logging.getLogger(__name__)
 
-
-def build_transaction_graph(
-    flagged_df: pd.DataFrame,
-    all_df: pd.DataFrame,
-    account_id: str,
-    hop_radius: int = 2,
-    time_window_days: int = 30,
-) -> nx.DiGraph:
+class GraphAgent:
     """
-    Build a directed subgraph centred on account_id.
+    Phase 2.1 Graph Construction (Corrected / Optimized)
 
-    Args:
-        flagged_df:        Flagged transactions (to identify the anchor event).
-        all_df:            Full cleaned transaction DataFrame.
-        account_id:        Account under investigation.
-        hop_radius:        Number of hops to expand from account_id.
-        time_window_days:  Temporal window (days before the last flagged txn).
-
-    Returns:
-        nx.DiGraph of the transaction subgraph.
+    Features:
+    - Internal-edge filtering
+    - hop_radius=1 safe default
+    - hub control (limit neighbors per node)
+    - faster lookup using indexes
+    - time window filtering
     """
-    # Determine time window from latest flagged transaction for this account
-    account_flags = flagged_df[
-        (flagged_df["sender_id"] == account_id)
-        | (flagged_df["receiver_id"] == account_id)
-    ]
 
-    if account_flags.empty:
-        logger.warning(
-            f"Account {account_id} not found in flagged transactions. "
-            "Building graph from all_df directly."
-        )
-        reference_time = all_df["timestamp"].max()
-    else:
-        reference_time = account_flags["timestamp"].max()
+    def __init__(self, transactions_df: pd.DataFrame):
+        self.df = transactions_df.copy()
 
-    window_start = reference_time - timedelta(days=time_window_days)
+        # Ensure datetime
+        self.df["timestamp"] = pd.to_datetime(self.df["timestamp"])
 
-    # Filter all transactions to the time window
-    windowed_df = all_df[all_df["timestamp"] >= window_start].copy()
+        # Sort newest first (helps hub control use recent rows)
+        self.df = self.df.sort_values("timestamp", ascending=False)
 
-    logger.info(
-        f"Building graph for account {account_id} | "
-        f"window: {window_start.date()} → {reference_time.date()} | "
-        f"hops: {hop_radius}"
-    )
-
-    # BFS-style expansion
-    included_accounts = {account_id}
-    frontier = {account_id}
-
-    for hop in range(hop_radius):
-        new_frontier = set()
-        for acct in frontier:
-            connected = _get_connected_accounts(acct, windowed_df)
-            new_accounts = connected - included_accounts
-            new_frontier.update(new_accounts)
-            included_accounts.update(new_accounts)
-        frontier = new_frontier
-        if not frontier:
-            logger.info(f"Expansion stopped at hop {hop + 1} — no new accounts.")
-            break
-
-    # Build the subgraph from all edges between included accounts
-    subgraph_edges = windowed_df[
-        windowed_df["sender_id"].isin(included_accounts)
-        & windowed_df["receiver_id"].isin(included_accounts)
-    ]
-
-    G = _build_digraph(subgraph_edges)
-    _annotate_nodes(G, windowed_df, included_accounts)
-
-    logger.info(
-        f"Subgraph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges."
-    )
-    return G
-
-
-def _get_connected_accounts(account_id: str, df: pd.DataFrame) -> set:
-    """Return all accounts directly connected to account_id (in or out)."""
-    sent_to = set(df[df["sender_id"] == account_id]["receiver_id"].unique())
-    received_from = set(df[df["receiver_id"] == account_id]["sender_id"].unique())
-    return sent_to | received_from
-
-
-def _build_digraph(edges_df: pd.DataFrame) -> nx.DiGraph:
-    """Construct a DiGraph from an edge DataFrame."""
-    G = nx.DiGraph()
-    for _, row in edges_df.iterrows():
-        G.add_edge(
-            row["sender_id"],
-            row["receiver_id"],
-            amount=row["amount"],
-            timestamp=str(row["timestamp"]),
-            transaction_type=row["transaction_type"],
-            transaction_id=row["transaction_id"],
-        )
-    return G
-
-
-def _annotate_nodes(
-    G: nx.DiGraph, df: pd.DataFrame, account_ids: set
-) -> None:
-    """Add aggregate financial stats as node attributes."""
-    for acct in account_ids:
-        total_sent = df[df["sender_id"] == acct]["amount"].sum()
-        total_received = df[df["receiver_id"] == acct]["amount"].sum()
-        G.nodes[acct]["total_sent"] = float(total_sent)
-        G.nodes[acct]["total_received"] = float(total_received)
-        G.nodes[acct]["net_flow"] = float(total_received - total_sent)
-
-
-def graph_to_dict(G: nx.DiGraph) -> dict:
-    """
-    Serialize a NetworkX DiGraph to a JSON-compatible dict
-    for storage in AMLAgentState and API responses.
-
-    Returns:
-        {
-          "nodes": [{"id": str, "total_sent": float, ...}, ...],
-          "edges": [{"source": str, "target": str, "amount": float, ...}, ...]
+        # Build lookup maps
+        self.sender_map = {
+            acc: grp.reset_index(drop=True)
+            for acc, grp in self.df.groupby("sender_id")
         }
-    """
-    nodes = [
-        {"id": node, **attrs}
-        for node, attrs in G.nodes(data=True)
-    ]
-    edges = [
-        {"source": u, "target": v, **attrs}
-        for u, v, attrs in G.edges(data=True)
-    ]
-    return {"nodes": nodes, "edges": edges}
+
+        self.receiver_map = {
+            acc: grp.reset_index(drop=True)
+            for acc, grp in self.df.groupby("receiver_id")
+        }
+
+    # ---------------------------------------------------------
+    # Get linked rows for one account (recent + capped)
+    # ---------------------------------------------------------
+    def get_connected_rows(
+        self,
+        account_id,
+        cutoff_date,
+        max_neighbors=150
+    ):
+        sent = self.sender_map.get(account_id, pd.DataFrame())
+        recv = self.receiver_map.get(account_id, pd.DataFrame())
+
+        rows = pd.concat([sent, recv], ignore_index=True)
+
+        if rows.empty:
+            return rows
+
+        # Time filter
+        rows = rows[rows["timestamp"] >= cutoff_date]
+
+        if rows.empty:
+            return rows
+
+        # Hub control: keep only most recent rows
+        rows = rows.head(max_neighbors)
+
+        return rows
+
+    # ---------------------------------------------------------
+    # BFS hop expansion
+    # ---------------------------------------------------------
+    def expand_accounts(
+        self,
+        seed_account,
+        cutoff_date,
+        hop_radius=1,
+        max_neighbors=150
+    ):
+        visited = set()
+        frontier = {seed_account}
+        discovered = {seed_account}
+
+        for _ in range(hop_radius):
+            next_frontier = set()
+
+            for account in frontier:
+                if account in visited:
+                    continue
+
+                rows = self.get_connected_rows(
+                    account,
+                    cutoff_date,
+                    max_neighbors=max_neighbors
+                )
+
+                for row in rows.itertuples(index=False):
+                    sender = row.sender_id
+                    receiver = row.receiver_id
+
+                    if sender not in discovered:
+                        discovered.add(sender)
+                        next_frontier.add(sender)
+
+                    if receiver not in discovered:
+                        discovered.add(receiver)
+                        next_frontier.add(receiver)
+
+                visited.add(account)
+
+            frontier = next_frontier
+
+            if not frontier:
+                break
+
+        return discovered
+
+    # ---------------------------------------------------------
+    # Build subgraph
+    # ---------------------------------------------------------
+    def build_subgraph(
+        self,
+        account_id,
+        flag_date,
+        hop_radius=1,           # SAFE MODE default
+        time_window_days=30,
+        max_neighbors=150
+    ):
+        flag_date = pd.to_datetime(flag_date)
+        cutoff_date = flag_date - timedelta(days=time_window_days)
+
+        # Step 1: discover relevant accounts
+        accounts = self.expand_accounts(
+            seed_account=account_id,
+            cutoff_date=cutoff_date,
+            hop_radius=hop_radius,
+            max_neighbors=max_neighbors
+        )
+
+        # Step 2: INTERNAL EDGE FILTERING
+        # Keep only rows where BOTH sender and receiver are in accounts
+        sub_df = self.df[
+            (self.df["timestamp"] >= cutoff_date) &
+            (self.df["sender_id"].isin(accounts)) &
+            (self.df["receiver_id"].isin(accounts))
+        ]
+
+        # Step 3: Build graph
+        G = nx.DiGraph()
+
+        for row in sub_df.itertuples(index=False):
+            G.add_edge(
+                row.sender_id,
+                row.receiver_id,
+                amount=row.amount,
+                timestamp=row.timestamp,
+                txn_type=getattr(row, "payment_type", "UNKNOWN"),
+                transaction_id=getattr(row, "transaction_id", ""),
+                is_cross_border=getattr(row, "is_cross_border", 0)
+            )
+
+        # Step 4: isolated check
+        isolated = True
+        if account_id in G.nodes:
+            if G.degree(account_id) >= 2:
+                isolated = False
+
+        return {
+            "account_id": account_id,
+            "graph": G,
+            "node_count": G.number_of_nodes(),
+            "edge_count": G.number_of_edges(),
+            "is_isolated": isolated,
+            "hop_radius_used": hop_radius,
+            "accounts_discovered": len(accounts)
+        }
+
+
+# ---------------------------------------------------------
+# Helper Loader
+# ---------------------------------------------------------
+def load_graph_agent(csv_path):
+    df = pd.read_csv(csv_path)
+    return GraphAgent(df)
