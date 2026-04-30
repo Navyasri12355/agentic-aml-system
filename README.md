@@ -74,7 +74,136 @@ Phase 2 adds a sophisticated multi-agent system that investigates flagged transa
 
 ---
 
-## 🚀 Getting Started
+## � Phase 3: LangGraph Orchestration & Risk Investigation
+
+### Overview
+Phase 3 integrates the Phase 2 agents into a **LangGraph-based orchestration pipeline** that processes high-risk flagged transactions through a complete investigation workflow. Each flagged transaction flows through a deterministic state machine that chains together graph construction, feature extraction, pattern detection, and risk scoring.
+
+### Architecture: LangGraph State Machine
+
+The Phase 3 pipeline uses **LangGraph** to manage state and routing across five sequential nodes:
+
+```
+Entry Point
+    ↓
+[graph_node] → Build transaction subgraph
+    ↓
+[feature_node] → Extract structural features
+    ↓
+[pattern_node] → Detect AML patterns
+    ↓
+[risk_node] → Compute risk score & route
+    ↓
+[explanation_node] → Mark for Phase 4 (conditional)
+    ↓
+END
+```
+
+### State Definition (`InvestigationState`)
+
+Each transaction carries state through the pipeline:
+
+```python
+{
+    "transaction_id": str,
+    "account_id": str,
+    "flagged_row": dict,
+    "graph_result": dict,
+    "feature_result": dict,
+    "pattern_result": dict,
+    "risk_result": dict,
+    "routing_decision": str,  # EXIT or INVESTIGATE
+    "error": str or None
+}
+```
+
+### Node Functions
+
+| Node | Input | Function | Output |
+|------|-------|----------|--------|
+| **graph_node** | `flagged_row`, account_id, timestamp | Builds 2-hop transaction network subgraph | graph, node_count, edge_count, accounts_discovered |
+| **feature_node** | graph_result | Extracts 13+ graph/temporal/structural features | in_degree, out_degree, net_flow, velocity, burst_score, cycles |
+| **pattern_node** | feature_result | Rule-based pattern matching against 13 AML patterns | detected_patterns[], confidence{}, severity{} |
+| **risk_node** | feature_result, pattern_result, flagged_row | Two-stage risk classification | risk_score, risk_tier (HIGH/MEDIUM/LOW), routing_decision |
+| **explanation_node** | risk_result | Placeholder for Phase 4 SAR generation | Sets explanation_status: "pending_phase4" |
+
+### Routing Logic
+
+```
+IF risk_score >= HIGH_threshold:
+    routing_decision = "INVESTIGATE"
+    → explanation_node
+ELSE:
+    routing_decision = "EXIT"
+    → END
+```
+
+The HIGH threshold varies by flag reason:
+- **ML Detection**: 0.48 (aggressive)
+- **High Amount**: 0.65 (conservative)
+- **Unusual Hour**: 0.70 (very conservative)
+
+### Input & Output
+
+**Input:**
+- `data/processed/phase1_full_results.csv` – Full transaction dataset with anomaly scores
+- `data/processed/flagged_hybrid_final.csv` – Flagged transactions from Phase 1 hybrid detection
+
+**Output:**
+- `data/processed/phase3_risk_results.json` – Array of risk results with transaction_id, account_id, risk_score, risk_tier, routing_decision, detected_patterns
+
+**Example Output Entry:**
+```json
+{
+  "transaction_id": "TXN_12345",
+  "account_id": "ACC_789",
+  "risk_score": 0.732,
+  "risk_tier": "HIGH",
+  "routing_decision": "INVESTIGATE",
+  "detected_patterns": ["CIRCULAR_FLOW", "SMURFING"],
+  "score_components": {
+    "anomaly_score": 0.65,
+    "pattern_score": 0.90
+  }
+}
+```
+
+### Error Handling
+
+- **Graph construction fails** → graph_node returns error, downstream nodes skip, case logged
+- **Missing account** → feature_node returns empty result (all zeros), pattern detection continues
+- **Exception during execution** → Caught at node level, error stored in state, transaction logged
+
+### Phase 3 Performance (Sample: rows 575–595)
+
+| Metric | Value |
+|--------|-------|
+| Transactions Processed | 20 |
+| Succeeded | 20 (100%) |
+| Errors | 0 |
+| Sent to Explanation (HIGH) | 9 |
+| Risk Tier Distribution | LOW: 11 (55%), HIGH: 9 (45%) |
+| **Recall** | **100.0%** |
+| **Precision** | **100.0%** |
+
+### Running Phase 3
+
+```bash
+python -m src.pipeline.run_phase3
+```
+
+**Configuration (in `run_phase3.py`):**
+```python
+START_IDX = 575      # Start row in flagged dataset
+END_IDX = 595        # End row in flagged dataset
+hop_radius = 2       # Network hops (1-2 recommended)
+time_window_days = 30  # Historical window
+max_neighbors = 50   # Hub control (cap neighbors per node)
+```
+
+---
+
+## �🚀 Getting Started
 
 Follow these steps to set up and run the system on your local machine.
 
@@ -105,16 +234,22 @@ pip install -r requirements.txt
 3. Place the `HI-Small_Trans.csv` file inside `data/raw/`.
 
 ### 4. Running the Pipeline
-The first phase pipeline (Load -> Train -> Detect) can be run with a single command:
+The first phase pipeline (Load → Train → Detect) can be run with a single command:
 ```bash
 python -m src.pipeline.run_phase1
 ```
-*Note: If the raw dataset is missing, the script will automatically fallback to synthetic data for demonstration.*
 
-The second phase pipeline (Detect -> Investigate ) can be run with a single command:
+The second phase pipeline (Detect → Investigate with multi-agent network analysis) can be run with:
 ```bash
 python -m src.pipeline.run_phase2
 ```
+
+The third phase pipeline (LangGraph orchestration for risk investigation) can be run with:
+```bash
+python -m src.pipeline.run_phase3
+```
+
+*Note: If the raw dataset is missing, Phase 1 will automatically fallback to synthetic data for demonstration.*
 
 ### 5. Running Tests
 Ensure everything is working correctly by running the test suite:
@@ -146,6 +281,6 @@ jupyter notebook notebooks/
 ### Phases
 - [x] Phase 1: Data Ingestion + Detection Agent
 - [x] Phase 2: Graph Construction + Investigation Agent
-- [ ] Phase 3: LangGraph Orchestration
+- [x] Phase 3: LangGraph Orchestration & Risk Investigation
 - [ ] Phase 4: Explanation Agent + SAR Generation
 - [ ] Phase 5: Frontend + Evaluation
