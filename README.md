@@ -74,7 +74,7 @@ Phase 2 adds a sophisticated multi-agent system that investigates flagged transa
 
 ---
 
-## � Phase 3: LangGraph Orchestration & Risk Investigation
+## 📋 Phase 3: LangGraph Orchestration & Risk Investigation
 
 ### Overview
 Phase 3 integrates the Phase 2 agents into a **LangGraph-based orchestration pipeline** that processes high-risk flagged transactions through a complete investigation workflow. Each flagged transaction flows through a deterministic state machine that chains together graph construction, feature extraction, pattern detection, and risk scoring.
@@ -203,7 +203,7 @@ max_neighbors = 50   # Hub control (cap neighbors per node)
 
 ---
 
-## �🚀 Getting Started
+## 🚀 Getting Started
 
 Follow these steps to set up and run the system on your local machine.
 
