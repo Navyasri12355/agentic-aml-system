@@ -266,17 +266,32 @@ jupyter notebook notebooks/
 ---
 
 ## 📂 Project Structure
-- `data/`: Raw, processed, and report data files.
-- `models/`: Saved model pipelines (`.joblib`).
-- `notebooks/`: Jupyter notebooks for analysis.
-- `src/`: Source code for the pipeline and detection agents.
-- `tests/`: Unit tests for all modules.
+- `data/`: AML dataset files and generated outputs.
+    - `raw/`: Original IBM HI-Small input files.
+    - `processed/`: Phase outputs (`flagged_*`, `phase*_results`, `risk_scored_accounts.json`).
+- `docs/`: Prompt engineering and project notes.
+- `dummy_codes/`: Experimental/prototype agent implementations.
+- `frontend/`: React + Vite UI for investigation workflows.
+    - `src/api/client.js`: Frontend API client.
+    - `src/App.jsx`: Main UI.
+- `models/`: Persisted ML artifacts (`isolation_forest.joblib`, `random_forest.joblib`).
+- `notebooks/`: EDA, evaluation notebooks, and notebook model artifacts.
+- `src/`: Production backend code.
+    - `src/agents/`: Detection, graph, feature, pattern, risk, and explanation agents.
+    - `src/orchestration/`: LangGraph state machine, state definitions, and orchestrator runner.
+    - `src/pipeline/`: Phase entry points (`run_phase1.py`, `run_phase2.py`, `run_phase3.py`) and ingestion.
+    - `src/api/main.py`: FastAPI service exposing investigation endpoints.
+- `tests/`: Unit tests for ingestion, graph, detection, and risk logic.
+- `requirements.txt`: Python dependency specification.
+- `check.py`: Utility script at repository root.
 
 ## 🛠️ Tools Used
-- **Core**: Python, Pandas, Numpy
-- **ML**: Scikit-Learn (Isolation Forest)
-- **Testing**: Pytest, Joblib
-- **Visualization**: Matplotlib, Seaborn, Jupyter
+- **Backend/Core**: Python, Pandas, NumPy, tqdm, python-dotenv
+- **Machine Learning**: scikit-learn (Isolation Forest, Random Forest), imbalanced-learn (SMOTE), joblib
+- **Graph & Orchestration**: NetworkX, LangGraph
+- **API Layer**: FastAPI, Pydantic, CORS middleware
+- **Frontend**: React, Vite, Axios, Tailwind CSS, React Flow, Recharts, Zustand
+- **Testing & Analysis**: pytest, Jupyter
 
 ### Phases
 - [x] Phase 1: Data Ingestion + Detection Agent
