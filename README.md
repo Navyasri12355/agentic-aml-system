@@ -77,71 +77,68 @@ Phase 2 adds a sophisticated multi-agent system that investigates flagged transa
 ## 📋 Phase 3: LangGraph Orchestration & Risk Investigation
 
 ### Overview
-Phase 3 integrates the Phase 2 agents into a **LangGraph-based orchestration pipeline** that processes high-risk flagged transactions through a complete investigation workflow. Each flagged transaction flows through a deterministic state machine that chains together graph construction, feature extraction, pattern detection, and risk scoring.
+Phase 3 is now the production orchestration layer for the AML system. It wraps the investigation flow in a **LangGraph-based state machine** and exposes it through both a CLI wrapper and a FastAPI backend. Each flagged transaction is processed through the canonical orchestration runner so the API, CLI, and tests all exercise the same code path.
 
 ### Architecture: LangGraph State Machine
 
-The Phase 3 pipeline uses **LangGraph** to manage state and routing across five sequential nodes:
+The Phase 3 pipeline uses **LangGraph** to manage state and routing across seven nodes:
 
 ```
-Entry Point
+START
     ↓
-[graph_node] → Build transaction subgraph
+[detection_node] → Phase 1 cleanup + flagged transaction detection
     ↓
-[feature_node] → Extract structural features
+[graph_construction_node] → Build transaction subgraph
     ↓
-[pattern_node] → Detect AML patterns
+[feature_extraction_node] → Extract structural features
     ↓
-[risk_node] → Compute risk score & route
+[pattern_detection_node] → Detect AML patterns
     ↓
-[explanation_node] → Mark for Phase 4 (conditional)
+[risk_scoring_node] → Compute risk score & route
+    ↓
+[low_risk_exit_node] / [explanation_node]
     ↓
 END
 ```
 
-### State Definition (`InvestigationState`)
+### Runner-Based Execution
 
-Each transaction carries state through the pipeline:
+The canonical entry point is `src.orchestration.run.OrchestrationRunner`:
 
 ```python
-{
-    "transaction_id": str,
-    "account_id": str,
-    "flagged_row": dict,
-    "graph_result": dict,
-    "feature_result": dict,
-    "pattern_result": dict,
-    "risk_result": dict,
-    "routing_decision": str,  # EXIT or INVESTIGATE
-    "error": str or None
-}
+runner = create_runner(enable_debug_logging=False, enable_recovery=True)
+result = runner.investigate(
+    raw_transaction_path="data/processed/phase1_full_results.csv",
+    account_id="ACC_123",
+    hop_radius=2,
+    time_window_days=30,
+    max_neighbors=50,
+    contamination=0.02,
+)
 ```
 
 ### Node Functions
 
 | Node | Input | Function | Output |
 |------|-------|----------|--------|
-| **graph_node** | `flagged_row`, account_id, timestamp | Builds 2-hop transaction network subgraph | graph, node_count, edge_count, accounts_discovered |
-| **feature_node** | graph_result | Extracts 13+ graph/temporal/structural features | in_degree, out_degree, net_flow, velocity, burst_score, cycles |
-| **pattern_node** | feature_result | Rule-based pattern matching against 13 AML patterns | detected_patterns[], confidence{}, severity{} |
-| **risk_node** | feature_result, pattern_result, flagged_row | Two-stage risk classification | risk_score, risk_tier (HIGH/MEDIUM/LOW), routing_decision |
-| **explanation_node** | risk_result | Placeholder for Phase 4 SAR generation | Sets explanation_status: "pending_phase4" |
+| **detection_node** | raw transaction path | Loads, cleans, and flags suspicious transactions | clean_df, flagged_df |
+| **graph_construction_node** | flagged_row, account_id | Builds the transaction subgraph | subgraph, graph metadata |
+| **feature_extraction_node** | subgraph | Extracts graph and temporal features | features, feature statistics |
+| **pattern_detection_node** | features | Detects AML patterns | detected_patterns, confidence, severity |
+| **risk_scoring_node** | flagged_row, features, patterns | Computes risk score and routing decision | risk_result, routing_decision |
+| **low_risk_exit_node** | low-risk result | Generates a minimal exit report | final_report |
+| **explanation_node** | risk result | Phase 4 stub for SAR generation | final_report with placeholder narrative |
 
 ### Routing Logic
 
 ```
-IF risk_score >= HIGH_threshold:
-    routing_decision = "INVESTIGATE"
-    → explanation_node
+IF routing_decision == "EXIT":
+    → low_risk_exit_node
 ELSE:
-    routing_decision = "EXIT"
-    → END
+    → explanation_node
 ```
 
-The HIGH threshold varies by flag reason:
-- **ML Detection**: 0.48 (aggressive)
-- **High Amount**: 0.65 (conservative)
-- **Unusual Hour**: 0.70 (very conservative)
+The low-risk path exits early with a compact report. Higher-risk cases continue to the explanation stub, which currently marks the case for Phase 4 SAR generation.
 
 ### Input & Output
 
@@ -150,55 +147,63 @@ The HIGH threshold varies by flag reason:
 - `data/processed/flagged_hybrid_final.csv` – Flagged transactions from Phase 1 hybrid detection
 
 **Output:**
-- `data/processed/phase3_risk_results.json` – Array of risk results with transaction_id, account_id, risk_score, risk_tier, routing_decision, detected_patterns
+- `data/processed/phase3_risk_results.json` – Array of final reports from the phase-wise runner
+
+### API Endpoints
+
+The FastAPI service in `src/api/main.py` now exposes the Phase 3 runner directly:
+
+- `POST /investigate/v3` – Single-account investigation using an uploaded CSV
+- `POST /investigate/batch` – Batch investigation for a comma-separated account list
+- `GET /health` – Health check
 
 **Example Output Entry:**
 ```json
 {
-  "transaction_id": "TXN_12345",
   "account_id": "ACC_789",
+  "report_id": "rpt_abc123",
   "risk_score": 0.732,
   "risk_tier": "HIGH",
-  "routing_decision": "INVESTIGATE",
   "detected_patterns": ["CIRCULAR_FLOW", "SMURFING"],
-  "score_components": {
-    "anomaly_score": 0.65,
-    "pattern_score": 0.90
+  "sar_narrative": "[Phase 4 - SAR generation pending]",
+  "graph_summary": {
+    "node_count": 18,
+    "edge_count": 31
   }
 }
 ```
 
 ### Error Handling
 
-- **Graph construction fails** → graph_node returns error, downstream nodes skip, case logged
-- **Missing account** → feature_node returns empty result (all zeros), pattern detection continues
-- **Exception during execution** → Caught at node level, error stored in state, transaction logged
+- **Detection failure** → falls back to an empty flagged set and records the error
+- **Graph construction failure** → falls back to a minimal graph
+- **Feature/pattern failure** → falls back to empty/default features or `UNCLASSIFIED`
+- **Risk scoring failure** → falls back to a neutral MEDIUM risk result
+- **Pipeline crash** → generates a fallback final report
 
 ### Phase 3 Performance (Sample: rows 575–595)
 
 | Metric | Value |
 |--------|-------|
 | Transactions Processed | 20 |
-| Succeeded | 20 (100%) |
+| Succeeded | 20 |
 | Errors | 0 |
-| Sent to Explanation (HIGH) | 9 |
-| Risk Tier Distribution | LOW: 11 (55%), HIGH: 9 (45%) |
-| **Recall** | **100.0%** |
-| **Precision** | **100.0%** |
+| Routed to explanation stub | 9 |
+| Risk Tier Distribution | LOW: 11, HIGH: 9 |
 
 ### Running Phase 3
 
 ```bash
-python -m src.pipeline.run_phase3
+python -m src.pipeline.run_phase3 --clean-path data/processed/phase1_full_results.csv --flagged-path data/processed/flagged_hybrid_final.csv --start-idx 575 --end-idx 595 --output-path data/processed/phase3_risk_results.json
 ```
 
-**Configuration (in `run_phase3.py`):**
+**Configuration options:**
 ```python
-START_IDX = 575      # Start row in flagged dataset
-END_IDX = 595        # End row in flagged dataset
-hop_radius = 2       # Network hops (1-2 recommended)
-time_window_days = 30  # Historical window
-max_neighbors = 50   # Hub control (cap neighbors per node)
+--start-idx / --end-idx     # Slice the flagged dataset
+--hop-radius                # Graph expansion depth
+--time-window-days          # Historical lookback window
+--max-neighbors             # Cap neighbors per node
+--contamination             # Detection contamination ratio
 ```
 
 ---

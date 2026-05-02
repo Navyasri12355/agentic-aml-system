@@ -1,241 +1,111 @@
-# File: src/pipeline/run_phase3.py
+"""Phase 3 runner (phase-wise testing wrapper)
 
-import os
+This script compiles the production `src.orchestration.graph` once and
+invokes it per flagged transaction slice. It preserves the original
+CLI interface but delegates execution to the production LangGraph
+implementation so tests exercise the true pipeline.
+"""
+
+import argparse
 import json
+import os
+from datetime import datetime
+from typing import Any
+
 import pandas as pd
 from tqdm import tqdm
-from langgraph.graph import StateGraph, END
 
-from src.pipeline.state_phase3 import InvestigationState
-from src.agents.graph_agent import GraphAgent
-from src.agents.feature_agent import FeatureAgent
-from src.agents.pattern_agent import PatternAgent
-from src.agents.risk_agent import RiskAgent
-from src.utils.global_stats import build_global_stats
+from src.orchestration.state import create_initial_state
+from src.orchestration.run import create_runner
 
-
-# ─── Node Factories ───────────────────────────────────────────────────────────
-
-def make_graph_node(graph_agent: GraphAgent):
-    def graph_node(state: InvestigationState) -> dict:
-        try:
-            result = graph_agent.build_subgraph(
-                account_id=state["account_id"],
-                flag_date=state["flagged_row"]["timestamp"],
-                hop_radius=2,
-                time_window_days=30,
-                max_neighbors=50,
-            )
-            return {"graph_result": result}
-        except Exception as e:
-            return {"error": f"GraphAgent failed: {e}"}
-    return graph_node
-
-
-def make_feature_node(feature_agent: FeatureAgent):
-    def feature_node(state: InvestigationState) -> dict:
-        if state.get("error") or state.get("graph_result") is None:
-            return {}
-        try:
-            result = feature_agent.extract_features(state["graph_result"])
-            return {"feature_result": result}
-        except Exception as e:
-            return {"error": f"FeatureAgent failed: {e}"}
-    return feature_node
-
-
-def make_pattern_node(pattern_agent: PatternAgent):
-    def pattern_node(state: InvestigationState) -> dict:
-        if state.get("error") or state.get("feature_result") is None:
-            return {}
-        try:
-            result = pattern_agent.detect_patterns(state["feature_result"])
-            return {"pattern_result": result}
-        except Exception as e:
-            return {"error": f"PatternAgent failed: {e}"}
-    return pattern_node
-
-
-def make_risk_node(risk_agent: RiskAgent):
-    def risk_node(state: InvestigationState) -> dict:
-        if state.get("error") or state.get("pattern_result") is None:
-            return {}
-        try:
-            result = risk_agent.compute_risk(
-                flagged_row=state["flagged_row"],
-                feature_result=state["feature_result"],
-                pattern_result=state["pattern_result"],
-                graph_result=state["graph_result"],
-                transaction_id=state["transaction_id"],
-            )
-            routing = result.get("routing_decision", "EXIT")
-            return {"risk_result": result, "routing_decision": routing}
-        except Exception as e:
-            return {"error": f"RiskAgent failed: {e}", "routing_decision": "EXIT"}
-    return risk_node
-
-
-def explanation_node(state: InvestigationState) -> dict:
-    """
-    Placeholder for Phase 4 Explanation Agent + SAR generation.
-    Currently just marks the case as pending explanation.
-    """
-    risk = state.get("risk_result", {})
-    risk["explanation_status"] = "pending_phase4"
-    return {"risk_result": risk}
-
-
-# ─── Routing Logic ────────────────────────────────────────────────────────────
-
-def route_after_risk(state: InvestigationState) -> str:
-    if state.get("routing_decision") == "INVESTIGATE":
-        return "explanation_node"
-    return END
-
-
-# ─── Graph Builder ────────────────────────────────────────────────────────────
-
-def build_investigation_graph(graph_agent, feature_agent, pattern_agent, risk_agent):
-    builder = StateGraph(InvestigationState)
-
-    builder.add_node("graph_node",       make_graph_node(graph_agent))
-    builder.add_node("feature_node",     make_feature_node(feature_agent))
-    builder.add_node("pattern_node",     make_pattern_node(pattern_agent))
-    builder.add_node("risk_node",        make_risk_node(risk_agent))
-    builder.add_node("explanation_node", explanation_node)
-
-    builder.set_entry_point("graph_node")
-
-    builder.add_edge("graph_node",    "feature_node")
-    builder.add_edge("feature_node",  "pattern_node")
-    builder.add_edge("pattern_node",  "risk_node")
-
-    builder.add_conditional_edges(
-        "risk_node",
-        route_after_risk,
-        {
-            "explanation_node": "explanation_node",
-            END: END,
-        },
-    )
-
-    builder.add_edge("explanation_node", END)
-
-    return builder.compile()
-
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    START_IDX = 575
-    END_IDX   = 595
+    parser = argparse.ArgumentParser(description="Run Phase 3 using production orchestration graph")
+    parser.add_argument("--clean-path", default="data/processed/phase1_full_results.csv")
+    parser.add_argument("--flagged-path", default="data/processed/flagged_hybrid_final.csv")
+    parser.add_argument("--output-path", default="data/processed/phase3_risk_results.json")
+    parser.add_argument("--start-idx", type=int, default=0)
+    parser.add_argument("--end-idx", type=int, default=100)
+    parser.add_argument("--hop-radius", type=int, default=2)
+    parser.add_argument("--time-window-days", type=int, default=30)
+    parser.add_argument("--max-neighbors", type=int, default=50)
+    parser.add_argument("--contamination", type=float, default=0.02)
+    args = parser.parse_args()
 
-    clean_path   = "data/processed/phase1_full_results.csv"
-    flagged_path = "data/processed/flagged_hybrid_final.csv"
-    output_path  = "data/processed/phase3_risk_results.json"
+    clean_path = args.clean_path
+    flagged_path = args.flagged_path
+    output_path = args.output_path
 
     print("Loading data...")
-    clean_df   = pd.read_csv(clean_path)
-    flagged_df = pd.read_csv(flagged_path).iloc[START_IDX:END_IDX]
-    flagged_df["timestamp"] = pd.to_datetime(flagged_df["timestamp"])
-    clean_df["timestamp"]   = pd.to_datetime(clean_df["timestamp"])
+    clean_df = pd.read_csv(clean_path)
+    flagged_df = pd.read_csv(flagged_path).iloc[args.start_idx:args.end_idx]
 
-    print(f"Flagged slice: {len(flagged_df)} transactions (rows {START_IDX}–{END_IDX})")
+    # Ensure timestamps are datetime
+    if "timestamp" in flagged_df.columns:
+        flagged_df["timestamp"] = pd.to_datetime(flagged_df["timestamp"], errors="coerce")
+    if "timestamp" in clean_df.columns:
+        clean_df["timestamp"] = pd.to_datetime(clean_df["timestamp"], errors="coerce")
 
-    global_stats = build_global_stats(clean_df)
+    print(f"Flagged slice: {len(flagged_df)} transactions (rows {args.start_idx}–{args.end_idx})")
 
-    print("Initialising agents...")
-    graph_agent   = GraphAgent(clean_df)
-    feature_agent = FeatureAgent(global_stats)
-    pattern_agent = PatternAgent(global_stats)
-    risk_agent    = RiskAgent(global_stats)
+    # Create an orchestration runner which wraps the compiled graph
+    runner = create_runner(enable_debug_logging=False, output_dir=os.path.dirname(output_path) or None)
 
-    print("Compiling LangGraph...")
-    graph = build_investigation_graph(
-        graph_agent, feature_agent, pattern_agent, risk_agent
-    )
+    flat_results: list[Any] = []
+    errors: list[dict[str, Any]] = []
 
-    flat_results = []
-    errors       = []
+    print("Running Phase 3 pipeline (orchestration)...")
+    for _, row in tqdm(flagged_df.iterrows(), total=len(flagged_df), unit="tx"):
+        row_data = row.to_dict()
+        account_id = str(row_data.get("sender_id") or row_data.get("receiver_id") or "")
+        transaction_id = str(row_data.get("transaction_id", f"UNK_{account_id}"))
 
-    print("Running Phase 3 pipeline...")
-    for row in tqdm(flagged_df.itertuples(index=False), total=len(flagged_df), unit="tx"):
-        account_id     = str(getattr(row, "sender_id", None) or getattr(row, "receiver_id", ""))
-        transaction_id = str(getattr(row, "transaction_id", f"UNK_{account_id}"))
+        # Create a minimal initial state using the orchestration factory
+        state = create_initial_state(
+            raw_transaction_path=clean_path,
+            account_id=account_id,
+            hop_radius=args.hop_radius,
+            time_window_days=args.time_window_days,
+            max_neighbors=args.max_neighbors,
+            contamination=args.contamination,
+        )
 
-        initial_state: InvestigationState = {
-            "transaction_id":    transaction_id,
-            "account_id":        account_id,
-            "flagged_row":       row._asdict(),
-            "graph_result":      None,
-            "feature_result":    None,
-            "pattern_result":    None,
-            "risk_result":       None,
-            "routing_decision":  "EXIT",
-            "error":             None,
-        }
+        # Inject the flagged row so the graph can use it directly
+        state["flagged_row"] = row_data
+        state["transaction_id"] = transaction_id
+        state["overall_start_time"] = datetime.utcnow()
 
         try:
-            final_state = graph.invoke(initial_state)
-            risk = final_state.get("risk_result")
-            if risk:
-                risk["_error"] = final_state.get("error")
-                flat_results.append(risk)
-            elif final_state.get("error"):
-                errors.append({"transaction_id": transaction_id, "error": final_state["error"]})
+            result = runner.investigate(
+                raw_transaction_path=clean_path,
+                account_id=account_id,
+                hop_radius=args.hop_radius,
+                time_window_days=args.time_window_days,
+                max_neighbors=args.max_neighbors,
+                contamination=args.contamination,
+            )
+
+            final_report = result.get("result") or {}
+            if final_report:
+                final_report["transaction_id"] = transaction_id
+                final_report["status"] = result.get("status")
+                flat_results.append(final_report)
+            else:
+                errors.append({"transaction_id": transaction_id, "error": result.get("errors") or "No report produced"})
+
         except Exception as e:
             errors.append({"transaction_id": transaction_id, "error": str(e)})
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(flat_results, f, indent=2)
+        json.dump(flat_results, f, indent=2, default=str)
 
-    # ── Summary ──────────────────────────────────────────────────────────────
-    print(f"\n✅ Phase 3 complete")
+    # Summary
+    print(f"\n✅ Phase 3 orchestration run complete")
     print(f"   Processed : {len(flat_results) + len(errors)}")
     print(f"   Succeeded : {len(flat_results)}")
     print(f"   Errors    : {len(errors)}")
     print(f"   Output    : {output_path}")
-
-    if flat_results:
-        df_res = pd.DataFrame(flat_results)
-        print("\n📊 Risk tier distribution:")
-        for tier, cnt in df_res["risk_tier"].value_counts().items():
-            print(f"   {tier}: {cnt}  ({cnt/len(df_res)*100:.1f}%)")
-
-        inv = df_res[df_res["routing_decision"] == "INVESTIGATE"]
-        print(f"\n🔍 Sent to Explanation Node (HIGH risk): {len(inv)}")
-        print(f"   explanation_status: pending_phase4")
-
-    # ── Evaluation ───────────────────────────────────────────────────────────
-    label_col = next(
-        (c for c in flagged_df.columns if c in ("is_laundering", "Is Laundering", "label")),
-        None,
-    )
-    if label_col and flat_results:
-        df_res = pd.DataFrame(flat_results)
-        merged = flagged_df.merge(
-            df_res[["transaction_id", "routing_decision"]],
-            on="transaction_id", how="left",
-        )
-        actual   = int(merged[label_col].sum())
-        inv_df   = merged[merged["routing_decision"] == "INVESTIGATE"]
-        tp       = int(inv_df[label_col].sum())
-        fp       = len(inv_df) - tp
-        missed   = actual - tp
-
-        print(f"\n{'='*55}")
-        print(f"EVALUATION  (rows {START_IDX}:{END_IDX})")
-        print(f"{'='*55}")
-        print(f"  Actual laundering    : {actual}")
-        print(f"  Sent to INVESTIGATE  : {len(inv_df)}")
-        print(f"  True positives       : {tp}")
-        print(f"  False positives      : {fp}")
-        print(f"  Missed               : {missed}")
-        if actual:
-            print(f"  Recall               : {tp/actual*100:.1f}%")
-        if len(inv_df):
-            print(f"  Precision            : {tp/len(inv_df)*100:.1f}%")
 
 
 if __name__ == "__main__":

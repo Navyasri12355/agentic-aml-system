@@ -4,11 +4,23 @@ numpy>=1.24
 joblib>=1.3
 python-dotenv>=1.0
 pytest>=7.0
+pytest-cov>=4.0
+pytest-mock>=3.10
 jupyter>=1.0
 matplotlib>=3.7
 seaborn>=0.12
 imbalanced-learn
 xgboost
-langgraph
-langchain-core
+networkx>=3.1
+# Phase 3: LangGraph Orchestration
+langgraph>=0.1.0
+langchain>=0.1.0
+langchain-core>=0.1.0
+# Phase 4: Groq API (optional, needed for SAR generation)
+groq>=0.4.0
+# Utilities
 tqdm
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+typing-extensions>=4.0
