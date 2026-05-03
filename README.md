@@ -202,6 +202,26 @@ max_neighbors = 50   # Hub control (cap neighbors per node)
 ```
 
 ---
+### Phase 4 Performance (Sample: rows 575–595)
+SAR reports generated and available at ```data/reports```
+
+### Running Phase 4
+
+```bash
+python -m src.pipeline.run_phase4
+```
+
+### Phase 5
+In one terminal run: 
+```bash
+uvicorn src.api.main:app --reload
+```
+In another terminal run:
+```bash
+cd frontend
+npm run dev
+```
+Then open ```http://localhost:5173``` in your browser.
 
 ## 🚀 Getting Started
 
@@ -247,6 +267,11 @@ python -m src.pipeline.run_phase2
 The third phase pipeline (LangGraph orchestration for risk investigation) can be run with:
 ```bash
 python -m src.pipeline.run_phase3
+```
+
+The third phase pipeline (LangGraph orchestration with explanation node) can be run with:
+```bash
+python -m src.pipeline.run_phase4
 ```
 
 *Note: If the raw dataset is missing, Phase 1 will automatically fallback to synthetic data for demonstration.*
@@ -297,5 +322,5 @@ jupyter notebook notebooks/
 - [x] Phase 1: Data Ingestion + Detection Agent
 - [x] Phase 2: Graph Construction + Investigation Agent
 - [x] Phase 3: LangGraph Orchestration & Risk Investigation
-- [ ] Phase 4: Explanation Agent + SAR Generation
-- [ ] Phase 5: Frontend + Evaluation
+- [x] Phase 4: Explanation Agent + SAR Generation
+- [ ] Phase 5.4 onwards: Frontend + Evaluation
