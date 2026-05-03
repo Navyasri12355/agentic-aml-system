@@ -35,8 +35,8 @@ runner = create_runner(
 )
 
 
-@app.post("/investigate/v3")
-async def investigate_v3(
+@app.post("/investigate")
+async def investigate(
 	file: UploadFile = File(...),
 	account_id: str = Query(...),
 	hop_radius: int = Query(2, ge=1, le=4),

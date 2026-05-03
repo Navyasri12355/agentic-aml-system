@@ -6,7 +6,7 @@ export const investigate = async (file, accountId, hopRadius = 2, windowDays = 3
   const form = new FormData()
   form.append('file', file)
   const { data } = await api.post(
-    `/investigate/v3?account_id=${accountId}&hop_radius=${hopRadius}&time_window_days=${windowDays}`,
+    `/investigate?account_id=${accountId}&hop_radius=${hopRadius}&time_window_days=${windowDays}`,
     form, { headers: { 'Content-Type': 'multipart/form-data' } }
   )
   return data
