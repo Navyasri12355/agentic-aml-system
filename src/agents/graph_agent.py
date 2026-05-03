@@ -26,16 +26,9 @@ class GraphAgent:
         # Sort newest first (helps hub control use recent rows)
         self.df = self.df.sort_values("timestamp", ascending=False)
 
-        # Build lookup maps
-        self.sender_map = {
-            acc: grp.reset_index(drop=True)
-            for acc, grp in self.df.groupby("sender_id")
-        }
-
-        self.receiver_map = {
-            acc: grp.reset_index(drop=True)
-            for acc, grp in self.df.groupby("receiver_id")
-        }
+        # Build lookup maps using indices (much faster than creating DataFrame for each group)
+        self.sender_groups = self.df.groupby("sender_id").groups
+        self.receiver_groups = self.df.groupby("receiver_id").groups
 
     # ---------------------------------------------------------
     # Get linked rows for one account (recent + capped)
@@ -46,13 +39,15 @@ class GraphAgent:
         cutoff_date,
         max_neighbors=150
     ):
-        sent = self.sender_map.get(account_id, pd.DataFrame())
-        recv = self.receiver_map.get(account_id, pd.DataFrame())
+        sender_idx = self.sender_groups.get(account_id, [])
+        receiver_idx = self.receiver_groups.get(account_id, [])
 
-        rows = pd.concat([sent, recv], ignore_index=True)
+        if len(sender_idx) == 0 and len(receiver_idx) == 0:
+            return pd.DataFrame()
 
-        if rows.empty:
-            return rows
+        # Combine indices and slice the dataframe once
+        combined_idx = list(sender_idx) + list(receiver_idx)
+        rows = self.df.loc[combined_idx]
 
         # Time filter
         rows = rows[rows["timestamp"] >= cutoff_date]
@@ -180,3 +175,29 @@ class GraphAgent:
 def load_graph_agent(csv_path):
     df = pd.read_csv(csv_path)
     return GraphAgent(df)
+
+def build_transaction_graph(flagged_df: pd.DataFrame, all_df: pd.DataFrame, account_id: str, hop_radius: int = 2, time_window_days: int = 30) -> nx.DiGraph:
+    agent = GraphAgent(all_df)
+    
+    # Extract the flag_date from flagged_df for this account
+    account_flags = flagged_df[(flagged_df['sender_id'] == account_id) | (flagged_df['receiver_id'] == account_id)]
+    if not account_flags.empty:
+        flag_date = account_flags['timestamp'].max()
+    else:
+        # Default to the most recent transaction in all_df for this account
+        account_txns = all_df[(all_df['sender_id'] == account_id) | (all_df['receiver_id'] == account_id)]
+        if not account_txns.empty:
+            flag_date = pd.to_datetime(account_txns['timestamp'].max())
+        else:
+            flag_date = pd.Timestamp.now()
+            
+    result = agent.build_subgraph(
+        account_id=account_id,
+        flag_date=flag_date,
+        hop_radius=hop_radius,
+        time_window_days=time_window_days
+    )
+    return result["graph"]
+
+def graph_to_dict(G: nx.DiGraph) -> dict:
+    return nx.node_link_data(G)

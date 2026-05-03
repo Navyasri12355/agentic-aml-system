@@ -56,22 +56,44 @@ def main():
     print("PHASE 1 PIPELINE - FINAL RESULTS")
     print("============================================================")
     print("Dataset        : IBM AMLSim HI-Small")
-    print("Transactions   : 4,367,359")
-    print("True Laundering: 5,110 (0.12%)")
+    print(f"Transactions   : {len(df):,}")
+    true_laundering_count = df['is_laundering'].sum()
+    true_laundering_pct = (true_laundering_count / len(df) * 100) if len(df) > 0 else 0
+    print(f"True Laundering: {true_laundering_count:,} ({true_laundering_pct:.2f}%)")
     print("------------------------------------------------------------")
     print("Metric          | IF Baseline  | Hybrid (t=0.6)")
     print("------------------------------------------------------------")
-    print("Flagged         | 87,340       | 923,512")
-    print("Caught (TP)     | 8            | 3,194")
-    print("Missed (FN)     | 5,102        | 1,916")
-    print("Recall          | 0.0016       | 0.6250")
-    print("Precision       | 0.0001       | 0.0035")
-    print("FPR             | 0.0200       | 0.2110")
+    
+    if_flagged = if_metrics['flagged_count']
+    hybrid_flagged = hybrid_metrics['flagged_count']
+    print(f"Flagged         | {if_flagged:<12,} | {hybrid_flagged:,}")
+    
+    if_tp = if_metrics['confusion_matrix'][1][1]
+    hybrid_tp = hybrid_metrics['confusion_matrix'][1][1]
+    print(f"Caught (TP)     | {if_tp:<12,} | {hybrid_tp:,}")
+    
+    if_fn = if_metrics['confusion_matrix'][1][0]
+    hybrid_fn = hybrid_metrics['confusion_matrix'][1][0]
+    print(f"Missed (FN)     | {if_fn:<12,} | {hybrid_fn:,}")
+    
+    if_recall = if_metrics['recall']
+    hybrid_recall = hybrid_metrics['recall']
+    print(f"Recall          | {if_recall:<12.4f} | {hybrid_recall:.4f}")
+    
+    if_precision = if_metrics['precision']
+    hybrid_precision = hybrid_metrics['precision']
+    print(f"Precision       | {if_precision:<12.4f} | {hybrid_precision:.4f}")
+    
+    if_fpr = if_metrics['false_positive_rate']
+    hybrid_fpr = hybrid_metrics['false_positive_rate']
+    print(f"FPR             | {if_fpr:<12.4f} | {hybrid_fpr:.4f}")
+    
     print("------------------------------------------------------------")
-    print("Improvement     | Baseline     | 390x better recall")
+    recall_improvement = hybrid_recall / if_recall if if_recall > 0 else 0
+    print(f"Improvement     | Baseline     | {recall_improvement:.0f}x better recall")
     print("------------------------------------------------------------")
     print("Phase 2 Input   : data/processed/flagged_hybrid_final.csv")
-    print("Phase 2 Ready   : 923,512 flagged transactions")
+    print(f"Phase 2 Ready   : {hybrid_flagged:,} flagged transactions")
     print("============================================================")
 
 if __name__ == "__main__":

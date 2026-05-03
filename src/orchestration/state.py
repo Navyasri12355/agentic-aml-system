@@ -29,6 +29,7 @@ class AMLAgentState(TypedDict, total=False):
     # ── Phase 1 — Detection Agent ──────────────────────────────────────────
     clean_df: Optional[Any]            # pd.DataFrame — cleaned transactions
     flagged_df: Optional[Any]          # pd.DataFrame — suspicious transactions
+    global_stats: Optional[dict]       # dataset-level baseline stats
                                        #   columns: transaction_id, sender_id,
                                        #            receiver_id, amount, timestamp,
                                        #            anomaly_score, is_flagged,
@@ -36,6 +37,7 @@ class AMLAgentState(TypedDict, total=False):
 
     # ── Phase 2 — Graph + Feature + Pattern + Risk Agents ─────────────────
     subgraph: Optional[dict]           # serialised graph: {nodes: [...], edges: [...]}
+    _graph_obj: Optional[Any]          # Raw networkx DiGraph object
     features: Optional[dict]          # feature dict from feature_agent
     pattern_result: Optional[dict]    # {detected_patterns, pattern_confidence, is_isolated}
     risk_result: Optional[dict]       # {risk_score, risk_tier, routing_decision,
@@ -74,7 +76,9 @@ def initial_state(
         time_window_days=time_window_days,
         clean_df=None,
         flagged_df=None,
+        global_stats=None,
         subgraph=None,
+        _graph_obj=None,
         features=None,
         pattern_result=None,
         risk_result=None,

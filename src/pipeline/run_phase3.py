@@ -180,6 +180,8 @@ def main():
             risk = final_state.get("risk_result")
             if risk:
                 risk["_error"] = final_state.get("error")
+                risk["_feature_result"] = final_state.get("feature_result")
+                risk["_pattern_result"] = final_state.get("pattern_result")
                 flat_results.append(risk)
             elif final_state.get("error"):
                 errors.append({"transaction_id": transaction_id, "error": final_state["error"]})

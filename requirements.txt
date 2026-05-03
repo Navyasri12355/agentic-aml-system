@@ -12,3 +12,4 @@ xgboost
 langgraph
 langchain-core
 tqdm
+networkx

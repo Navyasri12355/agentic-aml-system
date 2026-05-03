@@ -221,7 +221,7 @@ cd aml-investigation-system
 python -m venv .venv
 # On Windows:
 .venv\Scripts\activate
-# On Linux/macOS:
+# On Linux/macOS/WSL:
 source .venv/bin/activate
 
 # Install requirements

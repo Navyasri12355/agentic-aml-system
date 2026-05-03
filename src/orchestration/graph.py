@@ -25,12 +25,13 @@ from langgraph.graph import StateGraph, END
 
 from src.orchestration.state import AMLAgentState
 from src.pipeline.data_ingestion import load_and_clean
-from src.agents.detection_agent import run_detection
+from src.agents.detection_agent import HybridDetectionAgent
 from src.agents.graph_agent import build_transaction_graph, graph_to_dict
-from src.agents.feature_agent import extract_features
-from src.agents.pattern_agent import detect_patterns
-from src.agents.risk_agent import compute_risk_score
+from src.agents.feature_agent import FeatureAgent
+from src.agents.pattern_agent import PatternAgent
+from src.agents.risk_agent import RiskAgent
 from src.agents.explanation_agent import generate_sar_report
+from src.utils.global_stats import build_global_stats
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,34 @@ def detection_node(state: AMLAgentState) -> AMLAgentState:
     """
     logger.info("[Node] detection_node — starting")
     try:
-        clean_df = load_and_clean(state["raw_transaction_path"])
-        flagged_df = run_detection(clean_df)
-        return {**state, "clean_df": clean_df, "flagged_df": flagged_df}
+        path = state["raw_transaction_path"]
+        import pandas as pd
+        import os
+        from src.pipeline.data_ingestion import load_ibm_pipeline
+        
+        # If the API defaults to the cached phase 1 file, skip the heavy ML step!
+        if path.endswith("phase1_full_results.csv"):
+            logger.info("Loading cached phase 1 results...")
+            clean_df = pd.read_csv(path)
+            
+            flagged_path = path.replace("phase1_full_results.csv", "flagged_hybrid_final.csv")
+            if os.path.exists(flagged_path):
+                flagged_df = pd.read_csv(flagged_path)
+            else:
+                agent = HybridDetectionAgent()
+                flagged_df = agent.detect_hybrid(clean_df)
+                
+            global_stats = build_global_stats(clean_df)
+            return {**state, "clean_df": clean_df, "flagged_df": flagged_df, "global_stats": global_stats}
+
+        # Otherwise, process the uploaded file normally
+        logger.info("Processing new uploaded dataset...")
+        clean_df = load_ibm_pipeline(path)
+        agent = HybridDetectionAgent()
+        flagged_df = agent.detect_hybrid(clean_df)
+        global_stats = build_global_stats(clean_df)
+        
+        return {**state, "clean_df": clean_df, "flagged_df": flagged_df, "global_stats": global_stats}
     except Exception as e:
         logger.error(f"detection_node failed: {e}")
         return {**state, "errors": state.get("errors", []) + [str(e)]}
@@ -91,12 +117,14 @@ def feature_extraction_node(state: AMLAgentState) -> AMLAgentState:
         if G is None:
             raise ValueError("Graph object not found in state — did graph_construction_node run?")
 
-        features = extract_features(
-            G=G,
-            account_id=state["account_id"],
-            df=state.get("clean_df"),
-        )
-        return {**state, "features": features}
+        agent = FeatureAgent(state.get("global_stats", {}))
+        graph_result = {
+            "account_id": state["account_id"],
+            "graph": G,
+            "hop_radius_used": state.get("hop_radius", 2)
+        }
+        feature_result = agent.extract_features(graph_result)
+        return {**state, "features": feature_result}
     except Exception as e:
         logger.error(f"feature_extraction_node failed: {e}")
         return {**state, "errors": state.get("errors", []) + [str(e)]}
@@ -111,7 +139,8 @@ def pattern_detection_node(state: AMLAgentState) -> AMLAgentState:
     """
     logger.info("[Node] pattern_detection_node — starting")
     try:
-        pattern_result = detect_patterns(state["features"])
+        agent = PatternAgent(state.get("global_stats", {}))
+        pattern_result = agent.detect_patterns(state["features"])
         return {**state, "pattern_result": pattern_result}
     except Exception as e:
         logger.error(f"pattern_detection_node failed: {e}")
@@ -144,10 +173,27 @@ def risk_scoring_node(state: AMLAgentState) -> AMLAgentState:
         else:
             anomaly_score = -0.1  # default: mildly anomalous
 
-        risk_result = compute_risk_score(
-            features=state["features"],
+        agent = RiskAgent(state.get("global_stats", {}))
+        
+        flagged_row = {"anomaly_score": anomaly_score, "amount": 0}
+        if flagged_df is not None and not flagged_df.empty:
+            account_rows = flagged_df[
+                (flagged_df["sender_id"] == account_id) |
+                (flagged_df["receiver_id"] == account_id)
+            ]
+            if not account_rows.empty:
+                flagged_row = account_rows.sort_values("anomaly_score").iloc[0]
+                
+        graph_result = {
+            "account_id": state["account_id"],
+            "graph": state.get("_graph_obj"),
+        }
+        
+        risk_result = agent.compute_risk(
+            flagged_row=flagged_row,
+            feature_result=state["features"],
             pattern_result=state["pattern_result"],
-            anomaly_score=anomaly_score,
+            graph_result=graph_result
         )
         return {**state, "risk_result": risk_result}
     except Exception as e:
@@ -219,7 +265,7 @@ def route_after_risk_scoring(state: AMLAgentState) -> str:
         "low_risk_exit" if tier is LOW
         "explanation"   if tier is MEDIUM or HIGH
     """
-    risk_result = state.get("risk_result", {})
+    risk_result = state.get("risk_result") or {}
     routing = risk_result.get("routing_decision", "INVESTIGATE")
     return "low_risk_exit" if routing == "EXIT" else "explanation"
 

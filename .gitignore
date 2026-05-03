@@ -9,6 +9,7 @@ data/processed/*.json
 # Reports - generated locally  
 data/reports/*.png
 data/reports/*.jpg
+data/reports/*.json
 
 # Models - too large for git
 models/*.joblib
@@ -33,6 +34,9 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+# React
+node_modules
+
 # IDE
 .vscode/
 .idea/
@@ -44,3 +48,5 @@ Thumbs.db
 
 # Logs
 *.log
+
+.env

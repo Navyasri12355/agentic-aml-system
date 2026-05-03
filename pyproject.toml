@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-aml-system"
+version = "0.1.0"
+description = "AML Investigation System"
+authors = [{ name = "Angela Varghese" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pandas",
+    "python-dotenv",
+    "pydantic",
+]
