@@ -6,16 +6,39 @@ import pandas as pd, json, os, io, base64, tempfile
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.orchestration.state import initial_state
-from src.orchestration.graph import aml_pipeline
+import os
+from typing import Any, Dict
 
-app = FastAPI(title="AML Investigation API", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS","*").split(","), allow_methods=["*"], allow_headers=["*"])
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile  # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware  # pyright: ignore[reportMissingImports]
 
-class InvestigateRequest(BaseModel):
-    account_id: str
-    hop_radius: int = 2
-    time_window_days: int = 30
+from src.orchestration.run import create_runner
+
+
+app = FastAPI(
+	title="AML Investigation API",
+	version="1.0.0",
+	description="API for Phase 3 AML investigations.",
+)
+
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=["*"],
+	allow_credentials=True,
+	allow_methods=["*"],
+	allow_headers=["*"],
+)
+
+
+# -----------------------------
+# Phase 3 Orchestration API
+# -----------------------------
+# Initialize a singleton orchestration runner for the FastAPI process.
+runner = create_runner(
+	enable_debug_logging=False,
+	enable_recovery=True,
+	output_dir=os.getenv("PHASE3_REPORT_DIR", "reports/")
+)
 
 @app.get("/")
 def root():

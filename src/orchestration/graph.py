@@ -1,27 +1,20 @@
+# File: src/orchestration/graph.py
 """
-graph.py
---------
-Phase 3: LangGraph pipeline definition.
+Phase 3 LangGraph Orchestration - Complete Pipeline Definition
 
-Nodes wrap Phase 1 and 2 agent functions. Conditional routing
-is applied after risk_scoring_node based on risk tier.
-
-Graph topology:
-    detection
-        └── graph_construction
-                └── feature_extraction
-                        └── pattern_detection
-                                └── risk_scoring
-                                        ├── (LOW)      ──► low_risk_exit ──► END
-                                        └── (MED/HIGH) ──► explanation   ──► END
-
-NOTE: This module is the Phase 3 entry point.
-      Phases 1 and 2 modules must be fully working before running this graph.
+Defines the complete AML investigation state machine with:
+- 7 core agent nodes (Detection, Graph, Feature, Pattern, Risk, Explanation, Exit)
+- Comprehensive error handling and recovery
+- Conditional routing based on risk tier
+- Retry logic with exponential backoff
+- Execution metrics and audit logging
 """
 
 import logging
+from datetime import datetime
+from typing import Any, Dict, Optional, cast
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
 
 from src.orchestration.state import AMLAgentState
 from src.pipeline.data_ingestion import load_and_clean
@@ -35,19 +28,27 @@ from src.utils.global_stats import build_global_stats
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NODE IMPLEMENTATIONS
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Node functions
-# ---------------------------------------------------------------------------
 
 def detection_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Load raw CSV, clean it, and run Isolation Forest detection.
-
-    Reads : raw_transaction_path
-    Writes: clean_df, flagged_df
+    Phase 1: Detection Agent Node
+    
+    Loads raw transactions, cleans data, and runs Isolation Forest
+    to flag suspicious transactions.
+    
+    Error handling:
+      - Validates input file exists
+      - Handles data format errors
+      - Falls back to empty flagged set on error
     """
-    logger.info("[Node] detection_node — starting")
+    agent_name = "detection_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
     try:
         path = state["raw_transaction_path"]
         import pandas as pd
@@ -78,40 +79,128 @@ def detection_node(state: AMLAgentState) -> AMLAgentState:
         
         return {**state, "clean_df": clean_df, "flagged_df": flagged_df, "global_stats": global_stats}
     except Exception as e:
-        logger.error(f"detection_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=True, max_retries=2
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: use empty flagged set
+        state["flagged_df"] = None
+        return state
 
 
 def graph_construction_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Build a directed transaction subgraph for the account under investigation.
-
-    Reads : flagged_df, clean_df, account_id, hop_radius, time_window_days
-    Writes: subgraph
+    Phase 2a: Graph Construction Node
+    
+    Builds transaction subgraph centered on flagged account
+    with context expansion to neighboring accounts.
+    
+    Error handling:
+      - Validates flagged_row exists
+      - Handles graph construction failures
+      - Falls back to minimal graph on error
     """
-    logger.info("[Node] graph_construction_node — starting")
+    agent_name = "graph_construction_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
     try:
-        G = build_transaction_graph(
-            flagged_df=state["flagged_df"],
-            all_df=state["clean_df"],
+        logger.info(f"[{agent_name}] Starting graph construction")
+        
+        if state.get("flagged_row") is None:
+            raise ValidationError("flagged_row is required but missing")
+
+        if state.get("skip_graph_expansion"):
+            logger.info(f"[{agent_name}] Using minimal graph (skip_graph_expansion=True)")
+            state["subgraph"] = {
+                "nodes": [],
+                "edges": [],
+                "node_count": 0,
+                "edge_count": 0,
+                "expansion_hops": 0
+            }
+            return state
+
+        from src.agents.graph_agent import GraphAgent
+
+        graph_agent = GraphAgent(
+            all_transactions=state.get("clean_df"),
+            global_stats=state.get("feature_statistics", {})
+        )
+
+        result = graph_agent.build_subgraph(
             account_id=state["account_id"],
+            flag_date=state["flagged_row"].get("timestamp"),
             hop_radius=state.get("hop_radius", 2),
             time_window_days=state.get("time_window_days", 30),
+            max_neighbors=state.get("max_neighbors", 50)
         )
-        return {**state, "subgraph": graph_to_dict(G), "_graph_obj": G}
+
+        state["subgraph"] = result
+        state["graph_metadata"] = {
+            "source_account": state["account_id"],
+            "construction_timestamp": datetime.utcnow().isoformat(),
+            "expansion_hops": result.get("expansion_hops", 0)
+        }
+
+        logger.info(
+            f"[{agent_name}] Built graph with {result.get('node_count', 0)} nodes "
+            f"and {result.get('edge_count', 0)} edges"
+        )
+
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.SUCCESS, output_data=result
+        )
+
+        return state
+
     except Exception as e:
-        logger.error(f"graph_construction_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=True, max_retries=1
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: minimal graph
+        state["subgraph"] = {
+            "nodes": [],
+            "edges": [],
+            "node_count": 0,
+            "edge_count": 0,
+            "expansion_hops": 0
+        }
+        return state
 
 
 def feature_extraction_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Extract topological and temporal features from the subgraph.
-
-    Reads : _graph_obj (internal), account_id, clean_df
-    Writes: features
+    Phase 2b: Feature Extraction Node
+    
+    Extracts topological, temporal, and structural features
+    from transaction subgraph.
+    
+    Error handling:
+      - Validates subgraph structure
+      - Handles feature computation errors
+      - Falls back to minimal features on error
     """
-    logger.info("[Node] feature_extraction_node — starting")
+    agent_name = "feature_extraction_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
     try:
         G = state.get("_graph_obj")
         if G is None:
@@ -126,52 +215,129 @@ def feature_extraction_node(state: AMLAgentState) -> AMLAgentState:
         feature_result = agent.extract_features(graph_result)
         return {**state, "features": feature_result}
     except Exception as e:
-        logger.error(f"feature_extraction_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=True, max_retries=1
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: minimal features
+        state["features"] = {
+            "account_id": state["account_id"],
+            "subgraph_node_count": 0,
+            "subgraph_edge_count": 0,
+            "features": {}
+        }
+        return state
 
 
 def pattern_detection_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Classify laundering patterns from extracted features.
-
-    Reads : features
-    Writes: pattern_result
+    Phase 2c: Pattern Detection Node
+    
+    Identifies laundering patterns (funneling, scattering, etc.)
+    based on extracted features.
+    
+    Error handling:
+      - Validates feature structure
+      - Handles pattern classification errors
+      - Falls back to unclassified on error
     """
-    logger.info("[Node] pattern_detection_node — starting")
+    agent_name = "pattern_detection_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
     try:
         agent = PatternAgent(state.get("global_stats", {}))
         pattern_result = agent.detect_patterns(state["features"])
         return {**state, "pattern_result": pattern_result}
     except Exception as e:
-        logger.error(f"pattern_detection_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=True, max_retries=1
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: unclassified pattern
+        state["patterns"] = {
+            "account_id": state["account_id"],
+            "detected_patterns": ["UNCLASSIFIED"],
+            "pattern_confidence": {"UNCLASSIFIED": 1.0},
+            "is_isolated": True
+        }
+        return state
 
 
 def risk_scoring_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Compute weighted risk score and assign risk tier.
-
-    Reads : features, pattern_result, flagged_df (for anomaly score)
-    Writes: risk_result
+    Phase 2d: Risk Scoring Node
+    
+    Computes weighted risk score and determines routing decision.
+    
+    Error handling:
+      - Validates all upstream outputs
+      - Falls back to simplified scoring if primary fails
+      - Uses fallback risk result if enabled
     """
-    logger.info("[Node] risk_scoring_node — starting")
+    agent_name = "risk_scoring_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
     try:
-        flagged_df = state.get("flagged_df")
-        account_id = state["account_id"]
+        logger.info(f"[{agent_name}] Starting risk scoring")
+        
+        # Validate prerequisites
+        if state.get("flagged_row") is None:
+            raise ValidationError("flagged_row required for risk scoring")
 
-        # Get the most anomalous score for this account from the flagged df
-        if flagged_df is not None and not flagged_df.empty:
-            account_rows = flagged_df[
-                (flagged_df["sender_id"] == account_id)
-                | (flagged_df["receiver_id"] == account_id)
-            ]
-            anomaly_score = (
-                float(account_rows["anomaly_score"].min())
-                if not account_rows.empty
-                else -0.1
-            )
-        else:
-            anomaly_score = -0.1  # default: mildly anomalous
+        from src.agents.risk_agent import RiskAgent
+        from src.utils.global_stats import build_global_stats
+
+        global_stats = build_global_stats(state.get("clean_df"))
+        state["feature_statistics"] = global_stats
+
+        risk_agent = RiskAgent(global_stats=global_stats)
+        
+        result = risk_agent.compute_risk(
+            flagged_row=state["flagged_row"],
+            feature_result=state.get("features", {}),
+            pattern_result=state.get("patterns", {}),
+            graph_result=state.get("subgraph", {}),
+            transaction_id=state.get("flagged_row", {}).get("transaction_id")
+        )
+
+        # Validate risk result
+        is_valid, errors = validate_risk_result(result)
+        if not is_valid:
+            logger.warning(f"[{agent_name}] Risk result validation failed: {errors}")
+            if state.get("use_fallback_risk_scoring"):
+                result = create_fallback_risk_result(
+                    state["account_id"],
+                    f"Validation errors: {errors}"
+                )
+
+        state["risk_result"] = result
+        
+        # Set routing decision
+        routing = result.get("routing_decision", "EXIT")
+        state["routing_decision"] = routing
+        state["should_generate_sar"] = routing in ["INVESTIGATE", "ESCALATE"]
+
+        logger.info(
+            f"[{agent_name}] Risk score: {result.get('risk_score', 0):.2f}, "
+            f"Tier: {result.get('risk_tier', 'UNKNOWN')}, "
+            f"Routing: {routing}"
+        )
 
         agent = RiskAgent(state.get("global_stats", {}))
         
@@ -195,128 +361,309 @@ def risk_scoring_node(state: AMLAgentState) -> AMLAgentState:
             pattern_result=state["pattern_result"],
             graph_result=graph_result
         )
-        return {**state, "risk_result": risk_result}
+
+        return state
+
     except Exception as e:
-        logger.error(f"risk_scoring_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
-
-
-def explanation_node(state: AMLAgentState) -> AMLAgentState:
-    """
-    Generate a SAR narrative via Groq LLM (MEDIUM and HIGH risk cases).
-
-    Reads : account_id, risk_result, features, pattern_result
-    Writes: final_report
-    """
-    logger.info("[Node] explanation_node — starting")
-    try:
-        risk_result = state["risk_result"]
-        final_report = generate_sar_report(
-            account_id=state["account_id"],
-            risk_score=risk_result["risk_score"],
-            risk_tier=risk_result["risk_tier"],
-            features=state["features"],
-            pattern_result=state["pattern_result"],
-            risk_result=risk_result,
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=False, max_retries=0
         )
-        return {**state, "final_report": final_report}
-    except Exception as e:
-        logger.error(f"explanation_node failed: {e}")
-        return {**state, "errors": state.get("errors", []) + [str(e)]}
+        state = add_error_to_state(state, error_ctx, critical=True)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: use simplified risk scoring
+        fallback_result = create_fallback_risk_result(
+            state["account_id"],
+            f"Risk scoring failed: {e}"
+        )
+        state["risk_result"] = fallback_result
+        state["routing_decision"] = fallback_result["routing_decision"]
+        state["should_generate_sar"] = True  # Investigate on error
+        
+        return state
 
 
 def low_risk_exit_node(state: AMLAgentState) -> AMLAgentState:
     """
-    Generate a minimal exit summary for LOW risk accounts. No LLM call.
-
-    Reads : account_id, risk_result
-    Writes: final_report
+    Low Risk Exit Node
+    
+    Generates minimal report for LOW risk accounts.
+    Does NOT call LLM (Phase 4).
+    
+    Error handling:
+      - Graceful fallback if report generation fails
     """
-    logger.info("[Node] low_risk_exit_node — account cleared as low risk")
-    from datetime import datetime, timezone
+    agent_name = "low_risk_exit_node"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
+    try:
+        logger.info(f"[{agent_name}] Generating LOW risk exit report")
+        
+        from uuid import uuid4
+        report_id = state.get("report_id") or f"rpt_{uuid4().hex[:12]}"
+        state["report_id"] = report_id
 
-    risk_result = state.get("risk_result", {})
-    final_report = {
-        "account_id": state["account_id"],
-        "risk_score": risk_result.get("risk_score", 0.0),
-        "risk_tier": "LOW",
-        "detected_patterns": [],
-        "sar_narrative": None,
-        "exit_summary": (
-            "Transaction analysis complete. Risk score below threshold. "
-            "No suspicious laundering patterns detected. "
-            "No further investigation required at this time."
-        ),
-        "report_generated_at": datetime.now(timezone.utc).isoformat(),
-        "model_used": None,
-    }
-    return {**state, "final_report": final_report}
+        final_report = {
+            "account_id": state["account_id"],
+            "report_id": report_id,
+            "risk_score": state.get("risk_result", {}).get("risk_score", 0.0),
+            "risk_tier": "LOW",
+            "detected_patterns": state.get("patterns", {}).get("detected_patterns", []),
+            "sar_narrative": None,
+            "graph_summary": {
+                "node_count": state.get("subgraph", {}).get("node_count", 0),
+                "edge_count": state.get("subgraph", {}).get("edge_count", 0)
+            },
+            "key_findings": [
+                "Transaction analysis complete",
+                "Risk score below threshold",
+                "No suspicious patterns detected"
+            ],
+            "recommendations": ["No further action required"],
+            "report_generated_at": datetime.utcnow().isoformat(),
+            "execution_duration_seconds": 0.0,
+            "exit_reason": "LOW_RISK"
+        }
+
+        state["final_report"] = final_report
+        
+        logger.info(f"[{agent_name}] Generated exit report {report_id}")
+
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.SUCCESS, output_data=final_report
+        )
+
+        return state
+
+    except Exception as e:
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=True, max_retries=1
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: minimal report
+        state["final_report"] = create_fallback_final_report(
+            state, f"Exit node failed: {e}"
+        )
+        return state
 
 
-# ---------------------------------------------------------------------------
-# Conditional routing
-# ---------------------------------------------------------------------------
+def explanation_node(state: AMLAgentState) -> AMLAgentState:
+    """
+    Phase 4: Explanation Agent Node (Stub)
+    
+    Placeholder for LLM-based SAR generation.
+    Currently marks case as pending Phase 4.
+    
+    In Phase 4, this will:
+      - Call Groq API with dynamic prompt
+      - Generate structured SAR narrative
+      - Create final investigation report
+    
+    Error handling:
+      - Graceful fallback if LLM unavailable
+      - Fallback report if generation fails
+    """
+    agent_name = "explanation_agent"
+    start_time = datetime.utcnow()
+    state["agent_metrics"] = state.get("agent_metrics", {})
+    
+    try:
+        logger.info(f"[{agent_name}] Starting explanation node (Phase 4 stub)")
+        
+        from uuid import uuid4
+        report_id = state.get("report_id") or f"rpt_{uuid4().hex[:12]}"
+        state["report_id"] = report_id
+
+        # TODO: Phase 4 - Replace with actual Groq API call
+        # For now, generate placeholder report
+        
+        final_report = {
+            "account_id": state["account_id"],
+            "report_id": report_id,
+            "risk_score": state.get("risk_result", {}).get("risk_score", 0.5),
+            "risk_tier": state.get("risk_result", {}).get("risk_tier", "MEDIUM"),
+            "detected_patterns": state.get("patterns", {}).get("detected_patterns", []),
+            "sar_narrative": "[Phase 4 - SAR generation pending]",
+            "graph_summary": {
+                "node_count": state.get("subgraph", {}).get("node_count", 0),
+                "edge_count": state.get("subgraph", {}).get("edge_count", 0),
+                "has_cycle": state.get("features", {}).get("features", {}).get("has_cycle", False)
+            },
+            "key_findings": [
+                f"Risk score: {state.get('risk_result', {}).get('risk_score', 0):.2f}",
+                f"Patterns detected: {len(state.get('patterns', {}).get('detected_patterns', []))}",
+                "Further investigation recommended"
+            ],
+            "recommendations": [
+                "Generate SAR report (Phase 4)",
+                "Manual analyst review",
+                "Compliance escalation if HIGH risk"
+            ],
+            "report_generated_at": datetime.utcnow().isoformat(),
+            "execution_duration_seconds": 0.0,
+            "phase": "4_stub"
+        }
+
+        state["final_report"] = final_report
+        state["sar_narrative"] = final_report["sar_narrative"]
+        
+        logger.info(f"[{agent_name}] Generated Phase 4 stub report")
+
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.SUCCESS, output_data=final_report
+        )
+
+        return state
+
+    except Exception as e:
+        logger.error(f"[{agent_name}] Failed: {e}")
+        error_ctx = handle_agent_error(
+            agent_name, e, state, recoverable=False, max_retries=0
+        )
+        state = add_error_to_state(state, error_ctx, critical=False)
+        
+        state["agent_metrics"][agent_name] = log_agent_execution(
+            agent_name, start_time, datetime.utcnow(),
+            AgentStatus.FAILED, error=error_ctx
+        )
+        
+        # Fallback: use fallback report
+        state["final_report"] = create_fallback_final_report(
+            state, f"Explanation node failed: {e}"
+        )
+        return state
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONDITIONAL ROUTING
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def route_after_risk_scoring(state: AMLAgentState) -> str:
     """
-    Conditional edge: route based on risk tier.
-
+    Conditional routing logic after risk scoring.
+    
+    Routes based on risk_tier:
+      - LOW        → low_risk_exit_node (no SAR generation)
+      - MEDIUM/HIGH → explanation_node (SAR generation in Phase 4)
+      - CRITICAL   → explanation_node with escalation flag
+      - ERROR      → explanation_node (investigation recommended)
+    
+    Args:
+        state: Current orchestration state
+    
     Returns:
-        "low_risk_exit" if tier is LOW
-        "explanation"   if tier is MEDIUM or HIGH
+        Name of next node
     """
     risk_result = state.get("risk_result") or {}
     routing = risk_result.get("routing_decision", "INVESTIGATE")
     return "low_risk_exit" if routing == "EXIT" else "explanation"
 
+    logger.info(
+        f"[Routing] Decision: {routing_decision}, Tier: {risk_tier}, "
+        f"Has errors: {has_errors}"
+    )
 
-# ---------------------------------------------------------------------------
-# Graph assembly
-# ---------------------------------------------------------------------------
+    if routing_decision == "EXIT":
+        logger.info("[Routing] → low_risk_exit_node")
+        return "low_risk_exit_node"
+    elif routing_decision in ["INVESTIGATE", "ESCALATE"]:
+        logger.info("[Routing] → explanation_node")
+        return "explanation_node"
+    else:
+        # Default: investigate on ambiguous routing
+        logger.warning(f"[Routing] Unknown routing decision: {routing_decision}, investigating")
+        return "explanation_node"
 
-def build_aml_graph() -> StateGraph:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GRAPH BUILDER
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def build_orchestration_graph() -> StateGraph:
     """
-    Assemble and return the compiled LangGraph AML investigation pipeline.
-
+    Build the complete LangGraph state machine.
+    
+    Graph structure:
+        START
+          ↓
+        detection_node (Phase 1)
+          ↓
+        graph_construction_node (Phase 2a)
+          ↓
+        feature_extraction_node (Phase 2b)
+          ↓
+        pattern_detection_node (Phase 2c)
+          ↓
+        risk_scoring_node (Phase 2d)
+          ↓
+        [routing logic]
+        ↙               ↘
+    low_risk_exit   explanation_node
+        ↓               ↓
+        └────→  END  ←──┘
+    
     Returns:
-        Compiled LangGraph application ready for .invoke() or .stream()
+        Compiled StateGraph ready for execution
     """
     workflow = StateGraph(AMLAgentState)
 
-    # Register nodes
-    workflow.add_node("detection",          detection_node)
-    workflow.add_node("graph_construction", graph_construction_node)
-    workflow.add_node("feature_extraction", feature_extraction_node)
-    workflow.add_node("pattern_detection",  pattern_detection_node)
-    workflow.add_node("risk_scoring",       risk_scoring_node)
-    workflow.add_node("explanation",        explanation_node)
-    workflow.add_node("low_risk_exit",      low_risk_exit_node)
+    # Add all nodes
+    workflow.add_node("detection_node", detection_node)
+    workflow.add_node("graph_construction_node", graph_construction_node)
+    workflow.add_node("feature_extraction_node", feature_extraction_node)
+    workflow.add_node("pattern_detection_node", pattern_detection_node)
+    workflow.add_node("risk_scoring_node", risk_scoring_node)
+    workflow.add_node("low_risk_exit_node", low_risk_exit_node)
+    workflow.add_node("explanation_node", explanation_node)
 
-    # Entry point
-    workflow.set_entry_point("detection")
+    # Add edges (linear pipeline up to risk scoring)
+    workflow.add_edge(START, "detection_node")
+    workflow.add_edge("detection_node", "graph_construction_node")
+    workflow.add_edge("graph_construction_node", "feature_extraction_node")
+    workflow.add_edge("feature_extraction_node", "pattern_detection_node")
+    workflow.add_edge("pattern_detection_node", "risk_scoring_node")
 
-    # Linear edges
-    workflow.add_edge("detection",          "graph_construction")
-    workflow.add_edge("graph_construction", "feature_extraction")
-    workflow.add_edge("feature_extraction", "pattern_detection")
-    workflow.add_edge("pattern_detection",  "risk_scoring")
-
-    # Conditional split after risk scoring
+    # Conditional routing after risk scoring
     workflow.add_conditional_edges(
-        "risk_scoring",
+        "risk_scoring_node",
         route_after_risk_scoring,
         {
-            "low_risk_exit": "low_risk_exit",
-            "explanation":   "explanation",
-        },
+            "low_risk_exit_node": "low_risk_exit_node",
+            "explanation_node": "explanation_node"
+        }
     )
 
     # Terminal edges
-    workflow.add_edge("low_risk_exit", END)
-    workflow.add_edge("explanation",   END)
+    workflow.add_edge("low_risk_exit_node", END)
+    workflow.add_edge("explanation_node", END)
 
-    return workflow.compile()
+    return workflow
 
 
-# Singleton compiled graph — import this in run.py and main.py
-aml_pipeline = build_aml_graph()
+def compile_graph() -> Any:
+    """
+    Compile the orchestration graph for execution.
+    
+    Returns:
+        Compiled graph (runnable)
+    """
+    workflow = build_orchestration_graph()
+    app = workflow.compile()
+    return app
