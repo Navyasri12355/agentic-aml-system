@@ -16,14 +16,15 @@ from typing import Any, Dict, Optional, cast
 
 from langgraph.graph import StateGraph, END, START
 
-from src.orchestration.state import (
-    AMLAgentState, AgentStatus, RoutingDecision, RiskTier, create_initial_state
-)
-from src.orchestration.errors import (
-    handle_agent_error, add_error_to_state, validate_risk_result,
-    log_agent_execution, retry_on_error, ValidationError, AgentExecutionError,
-    create_fallback_risk_result, create_fallback_final_report, safe_get
-)
+from src.orchestration.state import AMLAgentState
+from src.pipeline.data_ingestion import load_and_clean
+from src.agents.detection_agent import HybridDetectionAgent
+from src.agents.graph_agent import build_transaction_graph, graph_to_dict
+from src.agents.feature_agent import FeatureAgent
+from src.agents.pattern_agent import PatternAgent
+from src.agents.risk_agent import RiskAgent
+from src.agents.explanation_agent import generate_sar_report
+from src.utils.global_stats import build_global_stats
 
 logger = logging.getLogger(__name__)
 
@@ -49,70 +50,34 @@ def detection_node(state: AMLAgentState) -> AMLAgentState:
     state["agent_metrics"] = state.get("agent_metrics", {})
     
     try:
-        logger.info(f"[{agent_name}] Starting detection node")
+        path = state["raw_transaction_path"]
+        import pandas as pd
+        import os
+        from src.pipeline.data_ingestion import load_ibm_pipeline
         
-        # Skip if explicitly disabled
-        if state.get("skip_detection") and state.get("flagged_df") is not None:
-            logger.info(f"[{agent_name}] Skipped (skip_detection=True)")
-            state["agent_metrics"][agent_name] = log_agent_execution(
-                agent_name, start_time, datetime.utcnow(),
-                AgentStatus.SKIPPED
-            )
-            return state
+        # If the API defaults to the cached phase 1 file, skip the heavy ML step!
+        if path.endswith("phase1_full_results.csv"):
+            logger.info("Loading cached phase 1 results...")
+            clean_df = pd.read_csv(path)
+            
+            flagged_path = path.replace("phase1_full_results.csv", "flagged_hybrid_final.csv")
+            if os.path.exists(flagged_path):
+                flagged_df = pd.read_csv(flagged_path)
+            else:
+                agent = HybridDetectionAgent()
+                flagged_df = agent.detect_hybrid(clean_df)
+                
+            global_stats = build_global_stats(clean_df)
+            return {**state, "clean_df": clean_df, "flagged_df": flagged_df, "global_stats": global_stats}
 
-        # Import here to avoid circular imports
-        from src.pipeline.data_ingestion import load_and_clean, normalize_ibm_amlsim
-        from src.agents.detection_agent import DetectionAgent
-
-        # Load and clean data
-        logger.info(f"[{agent_name}] Loading raw data from {state['raw_transaction_path']}")
-        raw_df = normalize_ibm_amlsim(state["raw_transaction_path"])
-        clean_df = load_and_clean(raw_df)
+        # Otherwise, process the uploaded file normally
+        logger.info("Processing new uploaded dataset...")
+        clean_df = load_ibm_pipeline(path)
+        agent = HybridDetectionAgent()
+        flagged_df = agent.detect_hybrid(clean_df)
+        global_stats = build_global_stats(clean_df)
         
-        state["clean_df"] = clean_df
-        logger.info(f"[{agent_name}] Cleaned {len(clean_df)} transactions")
-
-        # Run detection
-        logger.info(f"[{agent_name}] Running Isolation Forest detection")
-        detector = DetectionAgent(
-            contamination=state.get("contamination", 0.02),
-            model_path="models/isolation_forest.joblib"
-        )
-        detector.train(clean_df)
-        flagged_df = detector.predict(clean_df)
-        
-        state["flagged_df"] = flagged_df
-        state["detection_features_used"] = [
-            "amount_log", "hour_of_day", "day_of_week",
-            "is_cross_border", "transaction_type"
-        ]
-        state["detection_model_version"] = "isolation_forest_v1"
-        
-        logger.info(
-            f"[{agent_name}] Detected {len(flagged_df)} suspicious transactions "
-            f"out of {len(clean_df)} total"
-        )
-
-        # Find the flagged row for account_id
-        account_flagged = flagged_df[flagged_df["sender_id"] == state["account_id"]]
-        if len(account_flagged) > 0:
-            state["flagged_row"] = account_flagged.iloc[0].to_dict()
-            logger.info(f"[{agent_name}] Found flagged row for account {state['account_id']}")
-        else:
-            logger.warning(
-                f"[{agent_name}] No flagged transactions found for account "
-                f"{state['account_id']}, using first flagged transaction"
-            )
-            if len(flagged_df) > 0:
-                state["flagged_row"] = flagged_df.iloc[0].to_dict()
-
-        state["agent_metrics"][agent_name] = log_agent_execution(
-            agent_name, start_time, datetime.utcnow(),
-            AgentStatus.SUCCESS, output_data=flagged_df
-        )
-
-        return state
-
+        return {**state, "clean_df": clean_df, "flagged_df": flagged_df, "global_stats": global_stats}
     except Exception as e:
         logger.error(f"[{agent_name}] Failed: {e}")
         error_ctx = handle_agent_error(
@@ -237,35 +202,18 @@ def feature_extraction_node(state: AMLAgentState) -> AMLAgentState:
     state["agent_metrics"] = state.get("agent_metrics", {})
     
     try:
-        logger.info(f"[{agent_name}] Starting feature extraction")
-        
-        subgraph = state.get("subgraph")
-        if subgraph is None or subgraph.get("node_count", 0) == 0:
-            logger.warning(f"[{agent_name}] Empty or missing subgraph, using defaults")
-            state["features"] = {
-                "account_id": state["account_id"],
-                "subgraph_node_count": 0,
-                "subgraph_edge_count": 0,
-                "features": {}
-            }
-            return state
+        G = state.get("_graph_obj")
+        if G is None:
+            raise ValueError("Graph object not found in state — did graph_construction_node run?")
 
-        from src.agents.feature_agent import FeatureAgent
-
-        feature_agent = FeatureAgent(global_stats=state.get("feature_statistics", {}))
-        
-        result = feature_agent.extract_features(subgraph)
-        state["features"] = result
-
-        logger.info(f"[{agent_name}] Extracted features for {result.get('account_id')}")
-
-        state["agent_metrics"][agent_name] = log_agent_execution(
-            agent_name, start_time, datetime.utcnow(),
-            AgentStatus.SUCCESS, output_data=result
-        )
-
-        return state
-
+        agent = FeatureAgent(state.get("global_stats", {}))
+        graph_result = {
+            "account_id": state["account_id"],
+            "graph": G,
+            "hop_radius_used": state.get("hop_radius", 2)
+        }
+        feature_result = agent.extract_features(graph_result)
+        return {**state, "features": feature_result}
     except Exception as e:
         logger.error(f"[{agent_name}] Failed: {e}")
         error_ctx = handle_agent_error(
@@ -305,36 +253,9 @@ def pattern_detection_node(state: AMLAgentState) -> AMLAgentState:
     state["agent_metrics"] = state.get("agent_metrics", {})
     
     try:
-        logger.info(f"[{agent_name}] Starting pattern detection")
-        
-        features = state.get("features")
-        if features is None or not features.get("features"):
-            logger.warning(f"[{agent_name}] Missing features, using default patterns")
-            state["patterns"] = {
-                "account_id": state["account_id"],
-                "detected_patterns": ["UNCLASSIFIED"],
-                "pattern_confidence": {"UNCLASSIFIED": 1.0},
-                "is_isolated": True
-            }
-            return state
-
-        from src.agents.pattern_agent import PatternAgent
-
-        pattern_agent = PatternAgent()
-        result = pattern_agent.detect_patterns(features)
-        state["patterns"] = result
-
-        logger.info(
-            f"[{agent_name}] Detected patterns: {result.get('detected_patterns', [])}"
-        )
-
-        state["agent_metrics"][agent_name] = log_agent_execution(
-            agent_name, start_time, datetime.utcnow(),
-            AgentStatus.SUCCESS, output_data=result
-        )
-
-        return state
-
+        agent = PatternAgent(state.get("global_stats", {}))
+        pattern_result = agent.detect_patterns(state["features"])
+        return {**state, "pattern_result": pattern_result}
     except Exception as e:
         logger.error(f"[{agent_name}] Failed: {e}")
         error_ctx = handle_agent_error(
@@ -418,9 +339,27 @@ def risk_scoring_node(state: AMLAgentState) -> AMLAgentState:
             f"Routing: {routing}"
         )
 
-        state["agent_metrics"][agent_name] = log_agent_execution(
-            agent_name, start_time, datetime.utcnow(),
-            AgentStatus.SUCCESS, output_data=result
+        agent = RiskAgent(state.get("global_stats", {}))
+        
+        flagged_row = {"anomaly_score": anomaly_score, "amount": 0}
+        if flagged_df is not None and not flagged_df.empty:
+            account_rows = flagged_df[
+                (flagged_df["sender_id"] == account_id) |
+                (flagged_df["receiver_id"] == account_id)
+            ]
+            if not account_rows.empty:
+                flagged_row = account_rows.sort_values("anomaly_score").iloc[0]
+                
+        graph_result = {
+            "account_id": state["account_id"],
+            "graph": state.get("_graph_obj"),
+        }
+        
+        risk_result = agent.compute_risk(
+            flagged_row=flagged_row,
+            feature_result=state["features"],
+            pattern_result=state["pattern_result"],
+            graph_result=graph_result
         )
 
         return state
@@ -631,9 +570,9 @@ def route_after_risk_scoring(state: AMLAgentState) -> str:
     Returns:
         Name of next node
     """
-    routing_decision = state.get("routing_decision", "EXIT")
-    risk_tier = state.get("risk_result", {}).get("risk_tier", "LOW")
-    has_errors = state.get("has_errors", False)
+    risk_result = state.get("risk_result") or {}
+    routing = risk_result.get("routing_decision", "INVESTIGATE")
+    return "low_risk_exit" if routing == "EXIT" else "explanation"
 
     logger.info(
         f"[Routing] Decision: {routing_decision}, Tier: {risk_tier}, "

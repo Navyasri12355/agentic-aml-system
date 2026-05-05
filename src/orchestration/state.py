@@ -353,11 +353,22 @@ class AMLAgentState(TypedDict, total=False):
     total_duration_seconds: float
     """Total pipeline execution time"""
 
-    pipeline_version: str
-    """Version of orchestration pipeline"""
+    # ── Phase 1 — Detection Agent ──────────────────────────────────────────
+    clean_df: Optional[Any]            # pd.DataFrame — cleaned transactions
+    flagged_df: Optional[Any]          # pd.DataFrame — suspicious transactions
+    global_stats: Optional[dict]       # dataset-level baseline stats
+                                       #   columns: transaction_id, sender_id,
+                                       #            receiver_id, amount, timestamp,
+                                       #            anomaly_score, is_flagged,
+                                       #            flag_reason
 
-    execution_id: str
-    """Unique execution identifier for audit trail"""
+    # ── Phase 2 — Graph + Feature + Pattern + Risk Agents ─────────────────
+    subgraph: Optional[dict]           # serialised graph: {nodes: [...], edges: [...]}
+    _graph_obj: Optional[Any]          # Raw networkx DiGraph object
+    features: Optional[dict]          # feature dict from feature_agent
+    pattern_result: Optional[dict]    # {detected_patterns, pattern_confidence, is_isolated}
+    risk_result: Optional[dict]       # {risk_score, risk_tier, routing_decision,
+                                       #  score_components}
 
     audit_log: List[Dict[str, Any]]
     """Detailed execution audit log"""
@@ -436,13 +447,9 @@ def create_initial_state(
         # Phase 1
         clean_df=None,
         flagged_df=None,
-        flagged_row=None,
-        detection_features_used=None,
-        detection_model_version=None,
-        # Phase 2a
+        global_stats=None,
         subgraph=None,
-        graph_metadata=None,
-        # Phase 2b
+        _graph_obj=None,
         features=None,
         feature_statistics=None,
         # Phase 2c

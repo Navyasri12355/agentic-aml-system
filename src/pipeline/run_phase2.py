@@ -91,8 +91,8 @@ def main():
     output_path = "data/processed/risk_scored_accounts.json"
 
     # Configurable slice (modify these as needed)
-    start_idx = 575
-    end_idx = 595
+    start_idx = 2555
+    end_idx = 2580
     
     # Load Data
     print("Loading datasets...")

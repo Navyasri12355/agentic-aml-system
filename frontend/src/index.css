@@ -1,3 +1,30 @@
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,300,400&display=swap');
+@import url('https://unpkg.com/geist@1.0.0/dist/fonts/geist-sans/style.css');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-body bg-brand-light text-brand-dark antialiased transition-colors duration-500;
+  }
+  
+  .dark body {
+    @apply bg-brand-dark text-brand-light;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading tracking-tight;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-white/40 backdrop-blur-md border border-black/5 shadow-[0_8px_32px_0_rgba(0,0,0,0.03)] dark:bg-black/40 dark:border-white/10 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.2)];
+  }
+  
+  .glass-nav {
+    @apply bg-white/70 backdrop-blur-lg border-b border-black/5 dark:bg-brand-dark/70 dark:border-white/10;
+  }
+}

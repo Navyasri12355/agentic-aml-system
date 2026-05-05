@@ -142,15 +142,22 @@ class RiskAgent:
         if graph_result is not None:
             G = graph_result.get("graph")
             if G is not None:
+                included_nodes = set(list(G.nodes())[:50])
                 result["graph_data"] = {
                     "nodes": [
                         {"id": str(node), "label": str(node)[:8]} 
-                        for node in list(G.nodes())[:50]
+                        for node in included_nodes
                     ],
                     "edges": [
-                        {"source": str(u), "target": str(v), "amount": data.get("amount", 0)}
-                        for u, v, data in list(G.edges(data=True))[:100]
-                    ]
+                        {
+                            "source": str(u), 
+                            "target": str(v), 
+                            "amount": data.get("amount", 0),
+                            "transaction_id": data.get("transaction_id", "Unknown")
+                        }
+                        for u, v, data in G.edges(data=True)
+                        if u in included_nodes and v in included_nodes
+                    ][:100]
                 }
         
         return result
@@ -158,7 +165,7 @@ class RiskAgent:
     def normalize_anomaly(self, x):
         try:
             x = float(x)
-        except:
+        except (ValueError, TypeError):
             return 0.0
         
         p1 = self.global_stats.get("anomaly_p1", 0.0)
