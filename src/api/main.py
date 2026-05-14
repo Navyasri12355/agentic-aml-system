@@ -3,8 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, cast
 import pandas as pd, json, os, io, base64, tempfile
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+
+dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path)
 
 from src.orchestration.state import initial_state
 from src.orchestration.graph import aml_pipeline
