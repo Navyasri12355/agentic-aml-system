@@ -7,7 +7,7 @@ import 'reactflow/dist/style.css';
 const GlassNode = ({ data }) => {
   const isTarget = data.isTarget;
   return (
-    <div className={`group relative px-4 py-2 shadow-lg rounded-lg backdrop-blur-md border ${isTarget ? 'bg-brand-ochre/20 border-brand-ochre/50 text-brand-ochre' : 'bg-white/60 dark:bg-black/60 border-black/10 dark:border-white/10 text-brand-dark dark:text-brand-light'}`}>
+    <div className={`group relative px-4 py-2 shadow-lg rounded-lg backdrop-blur-md border ${isTarget ? 'bg-[#8f016e]/20 border-[#8f016e]/50 text-[#8f016e]' : 'bg-white/60 dark:bg-black/60 border-black/10 dark:border-white/10 text-brand-dark dark:text-brand-light'}`}>
       {/* React Flow requires Handles on custom nodes so edges can connect */}
       <Handle type="target" position={Position.Top} className="opacity-0 w-full h-full absolute top-0 left-0 border-none bg-transparent" />
 
@@ -62,7 +62,7 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
   return { nodes, edges };
 };
 
-export default function NetworkGraph({ subgraph, targetAccountId }) {
+export default function NetworkGraph({ subgraph, targetAccountId, targetTransactionId, flaggedTransactionId }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [isAutoLayout, setIsAutoLayout] = useState(false);
@@ -104,21 +104,37 @@ export default function NetworkGraph({ subgraph, targetAccountId }) {
     // 2. Create and filter edges
     const initialEdges = (subgraph.edges || [])
       .filter(edge => nodeIds.has(String(edge.source)) && nodeIds.has(String(edge.target)))
-      .map((edge, i) => ({
-        id: `e${i}-${edge.source}-${edge.target}`,
-        source: String(edge.source),
-        target: String(edge.target),
-        type: 'smoothstep',
-        animated: true,
-        label: `Tx: ${edge.transaction_id || 'N/A'} | $${edge.amount || 0}`,
-        labelStyle: { fill: '#fff', fontSize: 9, fontWeight: 600 },
-        labelBgStyle: { fill: 'rgba(10,10,10,0.8)', padding: 4, borderRadius: 4 },
-        style: { stroke: 'rgba(245, 158, 11, 0.6)', strokeWidth: 2 },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: 'rgba(245, 158, 11, 0.6)',
-        },
-      }));
+      .map((edge, i) => {
+        const isTargetTx = targetTransactionId && String(edge.transaction_id) === String(targetTransactionId);
+        const isFlaggedTx = flaggedTransactionId && String(edge.transaction_id) === String(flaggedTransactionId);
+        
+        let edgeColor = 'rgba(245, 158, 11, 0.6)'; // default ochre
+        let edgeStrokeWidth = 2;
+
+        if (isTargetTx) {
+          edgeColor = '#8f016e'; // Mauve
+          edgeStrokeWidth = 4;
+        } else if (isFlaggedTx) {
+          edgeColor = '#fa057f'; // Hot Pink
+          edgeStrokeWidth = 4;
+        }
+
+        return {
+          id: `e${i}-${edge.source}-${edge.target}`,
+          source: String(edge.source),
+          target: String(edge.target),
+          type: 'smoothstep',
+          animated: true,
+          label: `Tx: ${edge.transaction_id || 'N/A'} | $${edge.amount || 0}`,
+          labelStyle: { fill: '#fff', fontSize: 9, fontWeight: 600 },
+          labelBgStyle: { fill: 'rgba(10,10,10,0.8)', padding: 4, borderRadius: 4 },
+          style: { stroke: edgeColor, strokeWidth: edgeStrokeWidth },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: edgeColor,
+          },
+        };
+      });
 
     if (isAutoLayout) {
       // 3. Apply Dagre auto-layout

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { investigateAccount } from '../api/client';
+import { investigateAccount, investigateTransaction } from '../api/client';
 
 const useInvestigationStore = create((set) => ({
+  searchType: 'account',
   accountId: '',
   selectedFile: null,
   isInvestigating: false,
@@ -9,6 +10,7 @@ const useInvestigationStore = create((set) => ({
   result: null,
 
   setAccountId: (id) => set({ accountId: id }),
+  setSearchType: (type) => set({ searchType: type }),
   setSelectedFile: (file) => set({ selectedFile: file }),
   
   startInvestigation: async () => {
@@ -21,7 +23,13 @@ const useInvestigationStore = create((set) => ({
       const state = useInvestigationStore.getState();
       if (!state.accountId) return;
 
-      const response = await investigateAccount(state.accountId, state.selectedFile);
+      let response;
+      if (state.searchType === 'transaction') {
+        response = await investigateTransaction(state.accountId);
+      } else {
+        response = await investigateAccount(state.accountId, state.selectedFile);
+      }
+      
       set({ result: response.data, isInvestigating: false });
     } catch (err) {
       set({ 

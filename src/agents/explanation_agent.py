@@ -219,7 +219,7 @@ def _low_risk_exit(account_id: str, risk_score: float, timestamp: str) -> dict:
         "pattern_confidence": {},
         "sar_narrative": None,
         "exit_summary": (
-            "Transaction analysis complete. Risk score below threshold. "
+            "The transaction analysis complete. Risk score below threshold. "
             "No suspicious laundering patterns detected. "
             "No further investigation required at this time."
         ),

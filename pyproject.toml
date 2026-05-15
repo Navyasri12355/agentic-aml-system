@@ -16,3 +16,6 @@ dependencies = [
     "python-dotenv",
     "pydantic",
 ]
+
+[tool.pyright]
+extraPaths = ["."]

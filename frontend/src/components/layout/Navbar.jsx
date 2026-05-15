@@ -21,12 +21,8 @@ export default function Navbar() {
           </span>
         </div>
 
-        {/* Center: Search/Action Bar Placeholder */}
-        <div className="hidden md:flex flex-1 max-w-xl mx-8">
-          <div className="w-full glass-panel rounded-full h-10 px-4 flex items-center text-sm text-black/50 dark:text-white/50 border-black/10 dark:border-white/10">
-            <span className="font-body">Search account ID or transaction hash...</span>
-          </div>
-        </div>
+        {/* Center: Spacer */}
+        <div className="hidden md:flex flex-1 mx-8"></div>
 
         {/* Right: Profile & Theme Toggle */}
         <div className="flex items-center gap-6">

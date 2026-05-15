@@ -8,6 +8,7 @@ import { Search, UploadCloud } from 'lucide-react';
 
 export default function Investigate() {
   const { 
+    searchType, setSearchType,
     accountId, setAccountId, 
     selectedFile, setSelectedFile, 
     isInvestigating, startInvestigation, 
@@ -31,14 +32,32 @@ export default function Investigate() {
       {/* Header & Form */}
       <div className="flex flex-col items-center mt-12 mb-8">
         <h1 className="text-4xl font-heading font-black tracking-tight mb-2">New Investigation</h1>
-        <p className="text-black/50 dark:text-white/50 font-body mb-8">Initiate an agentic AML sweep on a specific account.</p>
+        <p className="text-black/50 dark:text-white/50 font-body mb-8">Initiate an agentic AML sweep on a specific account or transaction.</p>
         
+        {/* Glassmorphism Toggle */}
+        <div className="glass-card !w-72 !h-12 !rounded-full flex items-center p-1 mb-6">
+          <button 
+            type="button"
+            onClick={() => setSearchType('account')}
+            className={`flex-1 h-full rounded-full text-sm font-bold transition-all duration-300 ${searchType === 'account' ? 'bg-black/10 dark:bg-white/10 text-brand-dark dark:text-brand-light shadow-sm' : 'text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white'}`}
+          >
+            Account ID
+          </button>
+          <button 
+            type="button"
+            onClick={() => setSearchType('transaction')}
+            className={`flex-1 h-full rounded-full text-sm font-bold transition-all duration-300 ${searchType === 'transaction' ? 'bg-black/10 dark:bg-white/10 text-brand-dark dark:text-brand-light shadow-sm' : 'text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white'}`}
+          >
+            Transaction ID
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit} className="w-full max-w-2xl glass-panel p-2 rounded-full flex items-center gap-4">
           <div className="flex-1 flex items-center pl-6">
             <Search className="w-5 h-5 text-black/30 dark:text-white/30 mr-3" />
             <input 
               type="text" 
-              placeholder="Enter Account ID (e.g., 800737690)" 
+              placeholder={searchType === 'account' ? "Enter Account ID (e.g., 800737690)" : "Enter Transaction ID (e.g., TXN_136803)"} 
               required
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
@@ -48,9 +67,9 @@ export default function Investigate() {
           </div>
           
           <div className="flex items-center gap-2 pr-2">
-            <label className="cursor-pointer p-3 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors relative group">
+            <label className={`cursor-pointer p-3 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors relative group ${searchType === 'transaction' ? 'opacity-30 pointer-events-none' : ''}`}>
               <UploadCloud className={`w-5 h-5 ${selectedFile ? 'text-brand-sky' : 'text-black/50 dark:text-white/50'}`} />
-              <input type="file" accept=".csv" className="hidden" onChange={handleFileChange} disabled={isInvestigating} />
+              <input type="file" accept=".csv" className="hidden" onChange={handleFileChange} disabled={isInvestigating || searchType === 'transaction'} />
               
               {/* Tooltip */}
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity pointer-events-none">
@@ -98,7 +117,12 @@ export default function Investigate() {
 
           {/* Right Column: Graph & Narrative */}
           <div className="lg:col-span-2 flex flex-col gap-6">
-            <NetworkGraph subgraph={result.subgraph} targetAccountId={accountId} />
+            <NetworkGraph 
+              subgraph={result.subgraph} 
+              targetAccountId={searchType === 'account' ? accountId : null}
+              targetTransactionId={searchType === 'transaction' ? accountId : null}
+              flaggedTransactionId={result.flagged_transaction_id}
+            />
             <div className="h-[300px]">
               <NarrativeBox narrative={result.sar_narrative || result.exit_summary} />
             </div>

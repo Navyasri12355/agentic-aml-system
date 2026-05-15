@@ -21,8 +21,12 @@ export const investigateAccount = async (accountId, file = null) => {
     });
   }
 
-  // If no file, we just hit the endpoint with query params
+// If no file, we just hit the endpoint with query params
   return api.post(`/investigate?account_id=${encodeURIComponent(accountId)}&hop_radius=2&time_window_days=30`);
+};
+
+export const investigateTransaction = async (transactionId) => {
+  return api.post(`/investigate/transaction?transaction_id=${encodeURIComponent(transactionId)}`);
 };
 
 export default api;

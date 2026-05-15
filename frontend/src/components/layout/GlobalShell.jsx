@@ -1,7 +1,8 @@
 import React from 'react';
 import Navbar from './Navbar';
+import Sidebar from './Sidebar';
 
-export default function GlobalShell({ children }) {
+export default function GlobalShell({ children, currentPage, setCurrentPage }) {
   return (
     <div className="min-h-screen w-full relative overflow-hidden transition-colors duration-500">
       {/* Dynamic Background Gradients */}
@@ -20,9 +21,10 @@ export default function GlobalShell({ children }) {
       />
 
       <Navbar />
+      <Sidebar currentPage={currentPage} setCurrentPage={setCurrentPage} />
 
-      {/* Main Content Area */}
-      <main className="relative z-10 pt-24 px-6 max-w-screen-2xl mx-auto min-h-screen flex flex-col">
+      {/* Main Content Area - Added pl-16 to account for sidebar */}
+      <main className="relative z-10 pt-24 pl-20 pr-6 max-w-screen-2xl mx-auto min-h-screen flex flex-col">
         {children}
       </main>
     </div>
