@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, FileText, AudioLines } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 export default function DocumentViewer({ isOpen, onClose, docData }) {
   if (!isOpen || !docData) return null;
@@ -40,6 +41,12 @@ export default function DocumentViewer({ isOpen, onClose, docData }) {
                 <source src={docData.url} type="audio/mpeg" />
                 Your browser does not support the audio element.
               </audio>
+            </div>
+          ) : docData.type === 'markdown' ? (
+            <div className="glass-panel p-8 rounded-3xl overflow-y-auto border border-[#F13E93]/20 flex flex-col font-body text-black/80 dark:text-white/80">
+              <div className="prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown>{docData.content || ''}</ReactMarkdown>
+              </div>
             </div>
           ) : (
             <div className="glass-panel rounded-3xl overflow-hidden h-full min-h-[700px] border border-[#F13E93]/20 flex flex-col">

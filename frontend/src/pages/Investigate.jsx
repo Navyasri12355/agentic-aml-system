@@ -4,6 +4,7 @@ import StatusTracker from '../components/investigation/StatusTracker';
 import RiskGauge from '../components/investigation/RiskGauge';
 import NetworkGraph from '../components/investigation/NetworkGraph';
 import NarrativeBox from '../components/investigation/NarrativeBox';
+import DocumentViewer from '../components/layout/DocumentViewer';
 import { Search, UploadCloud } from 'lucide-react';
 
 export default function Investigate() {
@@ -14,6 +15,19 @@ export default function Investigate() {
     isInvestigating, startInvestigation, 
     error, result 
   } = useInvestigationStore();
+
+  const [viewerState, setViewerState] = React.useState({ isOpen: false, docData: null });
+
+  const handleExpand = (narrativeText) => {
+    setViewerState({
+      isOpen: true,
+      docData: {
+        type: 'markdown',
+        title: 'Suspicious Activity Report',
+        content: narrativeText
+      }
+    });
+  };
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -124,12 +138,20 @@ export default function Investigate() {
               flaggedTransactionId={result.flagged_transaction_id}
             />
             <div className="h-[300px]">
-              <NarrativeBox narrative={result.sar_narrative || result.exit_summary} />
+              <NarrativeBox 
+                narrative={result.sar_narrative || result.exit_summary} 
+                onExpand={handleExpand}
+              />
             </div>
           </div>
         </div>
       )}
 
+      <DocumentViewer 
+        isOpen={viewerState.isOpen} 
+        onClose={() => setViewerState({ isOpen: false, docData: null })}
+        docData={viewerState.docData}
+      />
     </div>
   );
 }
