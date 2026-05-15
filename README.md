@@ -2,6 +2,9 @@
 
 This repository contains a complete **Agentic AI-Based Anti-Money Laundering (AML) Investigation System** that processes millions of financial transactions, detects suspicious activity, performs graph-based network analysis, and generates regulatory-ready Suspicious Activity Reports (SARs).
 
+## Deployment
+Project live at [AML Investigation System](https://agentic-aml-system.vercel.app/)
+
 ---
 
 ## 📋 Phase 1: Foundation & Detection
@@ -323,4 +326,4 @@ jupyter notebook notebooks/
 - [x] Phase 2: Graph Construction + Investigation Agent
 - [x] Phase 3: LangGraph Orchestration & Risk Investigation
 - [x] Phase 4: Explanation Agent + SAR Generation
-- [ ] Phase 5.4 onwards: Frontend + Evaluation
+- [x] Phase 5.4 onwards: Frontend + Evaluation
