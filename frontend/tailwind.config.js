@@ -11,6 +11,14 @@ export default {
           ochre: '#f59e0b',
           dark: '#0a0a0a',
           light: '#fbfbfb',
+          'dark-plum': '#1A1A1D',
+          'dark-berry': '#3B1C32',
+          'dark-magenta': '#6A1E55',
+          'dark-pink': '#A64D79',
+          'light-hotpink': '#F13E93',
+          'light-pink': '#F891BB',
+          'light-peach': '#F9D0CD',
+          'light-yellow': '#FAFFCB'
         }
       },
       fontFamily: {

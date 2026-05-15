@@ -4,12 +4,12 @@ import Sidebar from './Sidebar';
 
 export default function GlobalShell({ children, currentPage, setCurrentPage }) {
   return (
-    <div className="min-h-screen w-full relative overflow-hidden transition-colors duration-500">
+    <div className="min-h-screen w-full relative overflow-hidden transition-colors duration-500 bg-white dark:bg-[#1A1A1D]">
       {/* Dynamic Background Gradients */}
       <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-brand-sky/20 dark:bg-brand-sky/10 blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-brand-sage/20 dark:bg-brand-sage/10 blur-[120px]" />
-        <div className="absolute top-[40%] left-[60%] w-[30%] h-[30%] rounded-full bg-brand-ochre/10 dark:bg-brand-ochre/5 blur-[120px]" />
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-[#F13E93]/20 dark:bg-[#A64D79]/60 blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-[#FAFFCB]/30 dark:bg-[#6A1E55]/60 blur-[120px]" />
+        <div className="absolute top-[40%] left-[60%] w-[30%] h-[30%] rounded-full bg-[#F9D0CD]/30 dark:bg-[#A64D79]/70 blur-[120px]" />
       </div>
 
       {/* Noise Overlay */}
