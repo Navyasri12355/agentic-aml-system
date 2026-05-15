@@ -4,7 +4,7 @@ data/raw/*.txt
 
 # Processed outputs - generated locally
 data/processed/*.csv
-data/processed/*.json
+# data/processed/*.json
 
 # Reports - generated locally  
 data/reports/*.png
