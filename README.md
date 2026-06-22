@@ -99,7 +99,7 @@ Entry Point
     ↓
 [explanation_node] → Mark for Phase 4 (conditional)
     ↓
-END
+   END
 ```
 
 ### State Definition (`InvestigationState`)
