@@ -24,7 +24,7 @@ The system processes the **IBM HI-Small** dataset (~4.3 Million transactions), w
 | Metric | Value |
 |--------|-------|
 | Total Transactions | 4,367,359 |
-| Flag Rate |  21.15% (923,512 alerts alerts) |
+| Flag Rate |  21.15% (923,512 alerts) |
 
 ---
 
